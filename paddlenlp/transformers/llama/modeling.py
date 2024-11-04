@@ -26,9 +26,11 @@ import paddle.distributed.fleet.meta_parallel as mpu
 import paddle.nn.functional as F
 from paddle import Tensor, nn
 from paddle.autograd import PyLayer
-from paddle.distributed import fleet
+from paddle.distributed import fleet, in_auto_parallel_align_mode
 from paddle.distributed.fleet.meta_parallel import get_rng_state_tracker
 from paddle.distributed.fleet.utils import recompute
+
+from ..utils import concat_mp_with_grad
 
 try:
     from paddle.incubate.nn.functional import fused_rotary_position_embedding
@@ -1686,7 +1688,6 @@ class LlamaModel(LlamaPretrainedModel):
             )  # [bs, 1, seq_len, seq_len]
 
         is_casual = False
-
         if attn_mask_startend_row_indices is None and self.config.use_flash_attention and get_env_device() != "gcu":
             if self.config.use_flash_attention_for_generation or use_casual_mask:
                 is_casual = True
@@ -1795,6 +1796,8 @@ class LlamaPretrainingCriterion(paddle.nn.Layer):
             self.loss_func = mpu.ParallelCrossEntropy(ignore_index=self.ignore_index)
         else:
             self.loss_func = paddle.nn.CrossEntropyLoss(reduction="none", ignore_index=self.ignore_index)
+        if in_auto_parallel_align_mode():
+            self.loss_func = paddle.nn.CrossEntropyLoss(reduction="none", ignore_index=self.ignore_index)
 
     def forward(self, prediction_scores, masked_lm_labels):
         if self.enable_parallel_cross_entropy:
@@ -1813,14 +1816,18 @@ class LlamaPretrainingCriterion(paddle.nn.Layer):
             # skip ignore_index which loss == 0
             # masked_lm_loss = masked_lm_loss[masked_lm_loss > 0]
             # loss = paddle.mean(masked_lm_loss)
-            binary_sequence = paddle.where(
-                masked_lm_loss > 0, paddle.ones_like(masked_lm_loss), paddle.zeros_like(masked_lm_loss)
-            )
-            count = paddle.sum(binary_sequence)
-            if count == 0:
-                loss = paddle.sum(masked_lm_loss * binary_sequence)
+            if in_auto_parallel_align_mode():
+                masked_lm_loss = paddle.masked_select(masked_lm_loss, masked_lm_loss > 0).astype("float32")
+                loss = paddle.mean(masked_lm_loss)
             else:
-                loss = paddle.sum(masked_lm_loss * binary_sequence) / count
+                binary_sequence = paddle.where(
+                    masked_lm_loss > 0, paddle.ones_like(masked_lm_loss), paddle.zeros_like(masked_lm_loss)
+                )
+                count = paddle.sum(binary_sequence)
+                if count == 0:
+                    loss = paddle.sum(masked_lm_loss * binary_sequence)
+                else:
+                    loss = paddle.sum(masked_lm_loss * binary_sequence) / count
 
         return loss
 
@@ -1928,7 +1935,6 @@ class LlamaForCausalLM(LlamaPretrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
-
         self.llama = LlamaModel(config)
         if config.tie_word_embeddings:
             self.lm_head = LlamaLMHead(config, embedding_weights=self.llama.embed_tokens.weight, transpose_y=True)
@@ -2053,7 +2059,8 @@ class LlamaForCausalLM(LlamaPretrainedModel):
         hidden_states = outputs[0]  # [bs, seq_len, dim]
 
         logits = self.lm_head(hidden_states)
-
+        if in_auto_parallel_align_mode():
+            logits = concat_mp_with_grad(logits)
         loss = None
         if labels is not None:
             loss = self.criterion(logits, labels)

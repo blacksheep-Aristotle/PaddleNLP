@@ -59,6 +59,7 @@ from ..utils.download import resolve_file_path
 from .aistudio_utils import aistudio_download
 
 HUGGINGFACE_CO_RESOLVE_ENDPOINT = "https://huggingface.co"
+from paddle.autograd import PyLayer
 
 
 def convert_ndarray_dtype(np_array: np.ndarray, target_dtype: str) -> np.ndarray:
@@ -1001,3 +1002,36 @@ def caculate_llm_flops(
     # 2 for mul + add in matmul
     # 1 for forward, 2 for backwards since we caluate gradients for input_x and input_y
     return 2 * batch_size * (layer_num * (flops_per_transformer * 3 + flops_recompute_transformer) + 3 * flops_loggits)
+
+
+class Concat(PyLayer):
+    @staticmethod
+    def forward(ctx, inp, axis, group):
+        inputs = []
+        paddle.distributed.all_gather(inputs, inp, group=group)
+        with paddle.no_grad():
+            cat = paddle.concat(inputs, axis=axis)
+        ctx.args_axis = axis
+        ctx.args_group = group
+        return cat
+
+    @staticmethod
+    def backward(ctx, grad):
+        axis = ctx.args_axis
+        group = ctx.args_group
+        with paddle.no_grad():
+            grads = paddle.split(grad, paddle.distributed.get_world_size(group), axis=axis)
+        grad = grads[paddle.distributed.get_rank(group)]
+        return grad
+
+
+def concat_mp_with_grad(input):
+    from paddle.distributed import fleet
+
+    hcg = fleet.get_hybrid_communicate_group()
+    mp_degree = hcg.get_model_parallel_world_size()
+    if mp_degree <= 1:
+        return input
+    else:
+        group = hcg.get_model_parallel_group()
+        return Concat.apply(input, -1, group)

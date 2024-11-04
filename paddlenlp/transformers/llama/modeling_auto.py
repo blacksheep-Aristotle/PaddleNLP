@@ -123,7 +123,9 @@ def scaled_dot_product_attention(
     output_attentions,
     alibi=None,
 ):
-    bsz, q_len, num_heads, head_dim = query_states.shape
+    bsz, q_len, num_heads, head_dim = (
+        query_states._local_value().shape if query_states._local_value() is not None else query_states.shape
+    )
     _, kv_seq_len, _, _ = value_states.shape
 
     if config.use_flash_attention and flash_attention:
@@ -149,11 +151,11 @@ def scaled_dot_product_attention(
                 key_states,
                 value_states,
                 attn_mask=attention_mask,
-                is_causal=attention_mask is None,
+                is_causal=attention_mask is None and query_states.shape[1] != 1,
             )
             attn_weights = None
 
-        attn_output = attn_output.reshape([bsz, q_len, head_dim * num_heads])
+        attn_output = attn_output.reshape([bsz, q_len, head_dim * query_states.shape[-2]])
         return (attn_output, attn_weights) if output_attentions else attn_output
     else:
         #  [ bz, seqlen, nhead, head_dim] -> [bs, nhead, seq_len, head_dim]
@@ -620,7 +622,6 @@ class LlamaDecoderLayerAuto(nn.Layer):
                 (see `cache`).
             cache (`Tuple(paddle.Tensor)`, *optional*): cached past key and value projection states
         """
-
         # [bs, seq_len, embed_dim] or [seq_len / n, bs, embed_dim] (if sequence_parallel)
         residual = hidden_states
 
@@ -852,7 +853,6 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
         self.hidden_size = config.hidden_size
         self.recompute_granularity = config.recompute_granularity
         self.no_recompute_layers = config.no_recompute_layers if config.no_recompute_layers is not None else []
-
         # Recompute defaults to False and is controlled by Trainer
         self.enable_recompute = False
         self.embed_tokens = nn.Embedding(
@@ -863,7 +863,7 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
         self.embed_tokens.weight = dist.shard_tensor(
             self.embed_tokens.weight,
             get_mesh(),
-            [dist.Replicate(), dist.Shard(1)],
+            [dist.Replicate(), dist.Shard(0)],
         )
 
         def get_layer_pp_info(layer_index):
@@ -964,7 +964,8 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
             seq_length_with_past += cache_length
 
         if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
+            with paddle.amp.auto_cast(False):
+                inputs_embeds = self.embed_tokens(input_ids)
 
         if self.config.sequence_parallel:
             # [B, S, H] -> [S, B, H]
@@ -986,13 +987,26 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
             attention_mask = paddle.ones((batch_size, seq_length_with_past), dtype=paddle.bool)
 
         if self.config.alibi:
+            if attention_mask is None:
+                attention_mask = paddle.ones((batch_size, seq_length_with_past), dtype=paddle.bool)
             alibi = build_alibi_tensor(attention_mask, self.config.num_attention_heads, dtype=inputs_embeds.dtype)
-            alibi = alibi.reshape([batch_size * self.config.num_attention_heads, 1, seq_length_with_past])
+            if self.config.tensor_parallel_degree > 1:
+                block_size = self.config.num_attention_heads // self.config.tensor_parallel_degree
+                alibi = alibi[
+                    :,
+                    self.config.tensor_parallel_rank
+                    * block_size : (self.config.tensor_parallel_rank + 1)
+                    * block_size,
+                ]
+                alibi = alibi.reshape([batch_size * block_size, 1, seq_length_with_past])
+            else:
+                alibi = alibi.reshape([batch_size * self.config.num_attention_heads, 1, seq_length_with_past])
         else:
             alibi = None
 
-        if self.config.use_flash_attention:
+        if self.config.use_flash_attention and not self.config.alibi:
             # attention_mask in flash_attn is always None for pretrain
+            # atttenton_mask is used in scaled_dot_product_attention with alibi_tensor
             attention_mask = None
         else:
             attention_mask = self._prepare_decoder_attention_mask(
@@ -1003,7 +1017,6 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
                 global_mesh,
                 [dist.Replicate() for _ in range(len(global_mesh._shape))],
             )
-
         hidden_states = inputs_embeds
         hidden_states = dist.reshard(hidden_states, get_mesh(), self.placements)
 
@@ -1170,6 +1183,7 @@ class LlamaLMHeadAuto(nn.Layer):
 
 class LlamaForCausalLM3DAuto(LlamaPretrainedModelAuto):
     enable_to_static_method = True
+    _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):
         super().__init__(config)
