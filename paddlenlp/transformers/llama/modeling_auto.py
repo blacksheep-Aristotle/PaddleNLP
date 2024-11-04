@@ -123,9 +123,9 @@ def scaled_dot_product_attention(
     output_attentions,
     alibi=None,
 ):
-    bsz, q_len, num_heads, head_dim = (
-        query_states._local_value().shape if query_states._local_value() is not None else query_states.shape
-    )
+    bsz, q_len, num_heads, head_dim = query_states.shape
+    if config.tensor_parallel_degree > 1:
+        num_heads = num_heads // config.tensor_parallel_degree
     _, kv_seq_len, _, _ = value_states.shape
 
     if config.use_flash_attention and flash_attention:
