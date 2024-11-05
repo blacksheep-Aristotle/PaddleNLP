@@ -170,11 +170,13 @@ def scaled_dot_product_attention(
         if alibi is not None:
             alibi = alibi.reshape([bsz, num_heads, 1, -1])
             attn_weights = attn_weights + alibi
-
-        if list(attn_weights.shape) != [bsz, num_heads, q_len, kv_seq_len]:
+        attn_weights_per_shape = (
+            attn_weights._local_value().shape if attn_weights._local_value() is not None else attn_weights.shape
+        )
+        if list(attn_weights_per_shape) != [bsz, num_heads, q_len, kv_seq_len]:
             raise ValueError(
                 f"Attention weights should be of shape {(bsz, num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.shape}"
+                f" {attn_weights_per_shape}"
             )
 
         # NOTE: we only call get_triangle_upper_mask under PP setup
