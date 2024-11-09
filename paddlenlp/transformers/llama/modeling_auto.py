@@ -124,12 +124,6 @@ def scaled_dot_product_attention(
     alibi=None,
 ):
     bsz, q_len, num_heads, head_dim = query_states.shape
-    per_num_heads = num_heads
-    per_bsz = bsz
-    if config.tensor_parallel_degree > 1:
-        per_num_heads = num_heads // config.tensor_parallel_degree
-    if config.sharding_parallel_degree > 1:
-        per_bsz = bsz // config.sharding_parallel_degree
     _, kv_seq_len, _, _ = value_states.shape
 
     if config.use_flash_attention and flash_attention:
@@ -148,7 +142,6 @@ def scaled_dot_product_attention(
             )
         else:
             if alibi is not None:
-                alibi = alibi.reshape([per_bsz, per_num_heads, 1, -1])
                 attention_mask = attention_mask.cast(alibi.dtype) + alibi
             attn_output = F.scaled_dot_product_attention(
                 query_states,
@@ -171,15 +164,11 @@ def scaled_dot_product_attention(
         attn_weights = paddle.matmul(query_states / math.sqrt(head_dim), key_states.transpose([0, 1, 3, 2]))
         # then add alibi bias
         if alibi is not None:
-            alibi = alibi.reshape([per_bsz, per_num_heads, 1, -1])
             attn_weights = attn_weights + alibi
-        attn_weights_per_shape = (
-            attn_weights._local_value().shape if attn_weights._local_value() is not None else attn_weights.shape
-        )
-        if list(attn_weights_per_shape) != [bsz, num_heads, q_len, kv_seq_len]:
+        if list(attn_weights.shape) != [bsz, num_heads, q_len, kv_seq_len]:
             raise ValueError(
                 f"Attention weights should be of shape {(bsz, num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights_per_shape}"
+                f" {attn_weights.shape}"
             )
 
         # NOTE: we only call get_triangle_upper_mask under PP setup
@@ -985,28 +974,21 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
                 global_mesh,
                 [dist.Replicate() for _ in range(len(global_mesh._shape))],
             )
-        per_bs = batch_size // self.config.sharding_parallel_degree
         # embed positions
         if not self.config.use_flash_attention and attention_mask is None:
             # [bs, seq_len]
-            attention_mask = paddle.ones((per_bs, seq_length_with_past), dtype=paddle.bool)
+            attention_mask = paddle.ones((batch_size, seq_length_with_past), dtype=paddle.bool)
 
         if self.config.alibi:
             if attention_mask is None:
-                attention_mask = paddle.ones((per_bs, seq_length_with_past), dtype=paddle.bool)
+                attention_mask = paddle.ones((batch_size, seq_length_with_past), dtype=paddle.bool)
             alibi = build_alibi_tensor(attention_mask, self.config.num_attention_heads, dtype=inputs_embeds.dtype)
-            if self.config.tensor_parallel_degree > 1:
-                block_size = self.config.num_attention_heads // self.config.tensor_parallel_degree
-                alibi = alibi[
-                    :,
-                    self.config.tensor_parallel_rank
-                    * block_size : (self.config.tensor_parallel_rank + 1)
-                    * block_size,
-                ]
-                alibi = alibi.reshape([per_bs * block_size, 1, seq_length_with_past])
-            else:
-                alibi = alibi.reshape([per_bs * self.config.num_attention_heads, 1, seq_length_with_past])
-            alibi = dist.shard_tensor(alibi, global_mesh, [dist.Replicate() for _ in range(len(global_mesh._shape))])
+            alibi_place = [dist.Replicate() for _ in range(len(global_mesh._shape))]
+            if "dp" in global_mesh.dim_names:
+                alibi_place[global_mesh.dim_names.index("dp")] = dist.Shard(0)
+            if "mp" in global_mesh.dim_names:
+                alibi_place[global_mesh.dim_names.index("mp")] = dist.Shard(1)
+            alibi = dist.shard_tensor(alibi, global_mesh, alibi_place)
         else:
             alibi = None
         if self.config.use_flash_attention and not self.config.alibi:
@@ -1015,7 +997,7 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
             attention_mask = None
         else:
             attention_mask = self._prepare_decoder_attention_mask(
-                attention_mask, (per_bs, seq_length), cache_length, inputs_embeds.dtype
+                attention_mask, (batch_size, seq_length), cache_length, inputs_embeds.dtype
             )  # [bs, 1, seq_len, seq_len]
             attention_mask = dist.shard_tensor(
                 attention_mask,
@@ -1059,10 +1041,16 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
                     else None
                 )
                 if alibi is not None:
+                    pp_mesh = get_mesh(ipp)
+                    alibi_place = [dist.Replicate() for _ in range(len(pp_mesh._shape))]
+                    if "dp" in pp_mesh.dim_names:
+                        alibi_place[pp_mesh.dim_names.index("dp")] = dist.Shard(0)
+                    if "mp" in pp_mesh.dim_names:
+                        alibi_place[pp_mesh.dim_names.index("mp")] = dist.Shard(1)
                     alibi = dist.reshard(
                         alibi,
                         get_mesh(ipp),
-                        [dist.Replicate(), dist.Replicate()],
+                        alibi_place,
                     )
             if idx in self.next_pp_stage_indexes:
                 hidden_states = dist.reshard(
