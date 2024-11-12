@@ -22,6 +22,12 @@ import paddle
 import paddle.distributed as dist
 import paddle.nn as nn
 from paddle.distributed import fleet
+from paddle.distributed.auto_parallel.intermediate.parallel_base import (
+    parallelize_model_and_optimizer,
+)
+from paddle.distributed.auto_parallel.intermediate.sharded_data_parallel import (
+    sharded_data_parallel,
+)
 from tqdm.auto import tqdm
 
 from paddlenlp.trainer import Trainer
@@ -115,30 +121,42 @@ class AutoTrainer(Trainer):
         return dist_loader
 
     def _wrap_for_auto(self, model, train_dataloader):
-        logger.info("Wrapping model for auto paralle")
+        logger.info(f"Wrapping model for auto paralle useing intermediate api {self.args.use_intermediate_api} ")
         dist_loader = self._wrap_for_dist_loader(train_dataloader)
-        sharding_parallel_mesh_dimension = self.args.sharding_parallel_mesh_dimension
 
-        if ShardingOption.SHARD_OP in self.args.sharding:
-            self.optimizer = dist.shard_optimizer(
-                self.optimizer,
-                dist.ShardingStage1(sharding_mesh_dim=sharding_parallel_mesh_dimension),
-                self.args.gradient_accumulation_steps,
-            )
-        elif ShardingOption.SHARD_GRAD_OP in self.args.sharding:
-            self.optimizer = dist.shard_optimizer(
-                self.optimizer,
-                dist.ShardingStage2(sharding_mesh_dim=sharding_parallel_mesh_dimension),
-                self.args.gradient_accumulation_steps,
-            )
-        elif ShardingOption.FULL_SHARD in self.args.sharding:
-            self.optimizer = dist.shard_optimizer(
-                self.optimizer,
-                dist.ShardingStage3(sharding_mesh_dim=sharding_parallel_mesh_dimension),
-                self.args.gradient_accumulation_steps,
-            )
+        if self.args.use_intermediate_api:
+            level = None
+            if ShardingOption.SHARD_OP in self.args.sharding:
+                level = "os"
+            elif ShardingOption.SHARD_GRAD_OP in self.args.sharding:
+                level = "os_g"
+            elif ShardingOption.FULL_SHARD in self.args.sharding:
+                level = "p_g_os"
+            model, self.optimizer = sharded_data_parallel(model, self.optimizer, level)
+            model, self.optimizer = parallelize_model_and_optimizer(model, self.optimizer)
+
         else:
-            self.optimizer = dist.shard_optimizer(self.optimizer, None, self.args.gradient_accumulation_steps)
+            sharding_parallel_mesh_dimension = self.args.sharding_parallel_mesh_dimension
+            if ShardingOption.SHARD_OP in self.args.sharding:
+                self.optimizer = dist.shard_optimizer(
+                    self.optimizer,
+                    dist.ShardingStage1(sharding_mesh_dim=sharding_parallel_mesh_dimension),
+                    self.args.gradient_accumulation_steps,
+                )
+            elif ShardingOption.SHARD_GRAD_OP in self.args.sharding:
+                self.optimizer = dist.shard_optimizer(
+                    self.optimizer,
+                    dist.ShardingStage2(sharding_mesh_dim=sharding_parallel_mesh_dimension),
+                    self.args.gradient_accumulation_steps,
+                )
+            elif ShardingOption.FULL_SHARD in self.args.sharding:
+                self.optimizer = dist.shard_optimizer(
+                    self.optimizer,
+                    dist.ShardingStage3(sharding_mesh_dim=sharding_parallel_mesh_dimension),
+                    self.args.gradient_accumulation_steps,
+                )
+            else:
+                self.optimizer = dist.shard_optimizer(self.optimizer, None, self.args.gradient_accumulation_steps)
 
         if self.args.to_static:
             unified_strategy = dist.Strategy()
