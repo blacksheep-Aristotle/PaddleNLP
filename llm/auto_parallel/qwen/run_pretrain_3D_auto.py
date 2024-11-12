@@ -40,12 +40,15 @@ from paddlenlp.transformers import (
     LinearAnnealingWithWarmupDecay,
     QWenConfig,
     QWenForCausalLM3DAuto,
+    QWenForCausalLM3DNet,
     QWenPretrainingCriterionAuto,
+    QWenPretrainingCriterionNet,
 )
 from paddlenlp.utils.log import logger
 
 MODEL_CLASSES = {
     "qwen": (QWenConfig, QWenForCausalLM3DAuto, QWenPretrainingCriterionAuto),
+    "qwen_network": (QWenConfig, QWenForCausalLM3DNet, QWenPretrainingCriterionNet),
 }
 
 from paddlenlp.data.causal_dataset import (
@@ -105,6 +108,10 @@ class PreTrainingArguments(AutoTrainingArguments):
     lazy_init: bool = field(
         default=False,
         metadata={"help": "whether use lazy init for model parameters"},
+    )
+    use_intermediate_api: bool = field(
+        default=False,
+        metadata={"help": "Weather to use auto_parallel intermediate api"},
     )
 
     def __post_init__(self):
