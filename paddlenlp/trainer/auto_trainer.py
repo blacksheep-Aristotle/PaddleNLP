@@ -22,9 +22,17 @@ import paddle
 import paddle.distributed as dist
 import paddle.nn as nn
 from paddle.distributed import fleet
+<<<<<<< HEAD
 from paddle.distributed.auto_parallel.intermediate.parallelize import (
     parallelize_model,
     parallelize_optimizer,
+=======
+from paddle.distributed.auto_parallel.intermediate.parallel_base import (
+    parallelize_model_and_optimizer,
+)
+from paddle.distributed.auto_parallel.intermediate.sharded_data_parallel import (
+    sharded_data_parallel,
+>>>>>>> add single_model network and use intermediate api
 )
 from tqdm.auto import tqdm
 
