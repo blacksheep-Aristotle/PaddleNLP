@@ -41,12 +41,15 @@ from paddlenlp.transformers import (
     LinearAnnealingWithWarmupDecay,
     LlamaConfig,
     LlamaForCausalLM3DAuto,
+    LlamaForCausalLM3DNet,
     LlamaPretrainingCriterion3DAuto,
+    LlamaPretrainingCriterion3DNet,
 )
 from paddlenlp.utils.log import logger
 
 MODEL_CLASSES = {
     "llama": (LlamaConfig, LlamaForCausalLM3DAuto, LlamaPretrainingCriterion3DAuto),
+    "llama_network": (LlamaConfig, LlamaForCausalLM3DNet, LlamaPretrainingCriterion3DNet),
 }
 
 
@@ -106,6 +109,10 @@ class PreTrainingArguments(AutoTrainingArguments):
     autotuner_benchmark: bool = field(
         default=False,
         metadata={"help": "Weather to run benchmark by autotuner. True for from_scratch and pad_max_length."},
+    )
+    use_intermediate_api: bool = field(
+        default=False,
+        metadata={"help": "Weather to use auto_parallel intermediate api"},
     )
 
     def __post_init__(self):
