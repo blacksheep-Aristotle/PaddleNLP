@@ -22,11 +22,8 @@ import paddle
 import paddle.distributed as dist
 import paddle.nn as nn
 from paddle.distributed import fleet
-from paddle.distributed.auto_parallel.intermediate.parallel_base import (
-    parallelize_model_and_optimizer,
-)
-from paddle.distributed.auto_parallel.intermediate.sharded_data_parallel import (
-    sharded_data_parallel,
+from paddle.distributed.auto_parallel.intermediate.parallelize import (
+    parallelize_optimizer,
 )
 from tqdm.auto import tqdm
 
@@ -71,6 +68,12 @@ class AutoTrainer(Trainer):
                     return loss
 
                 kwargs.update({"criterion": loss_func})
+
+        auto_config = None
+        if kwargs.get("auto_config", None) is not None:
+            auto_config = kwargs.pop("auto_config")
+
+        self.auto_config = auto_config
 
         super().__init__(*args, **kwargs)
         assert self.args.enable_auto_parallel
@@ -121,18 +124,17 @@ class AutoTrainer(Trainer):
         return dist_loader
 
     def _wrap_for_auto(self, model, train_dataloader):
-        logger.info(f"Wrapping model for auto paralle useing intermediate api {self.args.use_intermediate_api} ")
+        logger.info(f"Wrapping model for auto parallel using intermediate api {self.args.use_intermediate_api} ")
         dist_loader = self._wrap_for_dist_loader(train_dataloader)
         if self.args.use_intermediate_api:
-            level = None
-            if ShardingOption.SHARD_OP in self.args.sharding:
-                level = "os"
-            elif ShardingOption.SHARD_GRAD_OP in self.args.sharding:
-                level = "os_g"
-            elif ShardingOption.FULL_SHARD in self.args.sharding:
-                level = "p_g_os"
-            model, self.optimizer = sharded_data_parallel(model, self.optimizer, level)
-            model, self.optimizer = parallelize_model_and_optimizer(model, self.optimizer)
+            assert self.auto_config is not None
+            self.optimizer = parallelize_optimizer(
+                model,
+                self.optimizer,
+                dp_config=self.auto_config.dp_config,
+                mp_config=self.auto_config.mp_config,
+                pp_config=self.auto_config.pp_config,
+            )
         else:
             if ShardingOption.SHARD_OP in self.args.sharding:
                 self.optimizer = dist.shard_optimizer(

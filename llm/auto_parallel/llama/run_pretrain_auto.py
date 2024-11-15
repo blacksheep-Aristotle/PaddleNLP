@@ -26,6 +26,7 @@ import numpy as np
 import paddle
 import paddle.distributed as dist
 from paddle.distributed import fleet
+from paddle.distributed.auto_parallel.intermediate.parallelize import parallelize_model
 
 from paddlenlp.ops import Topology
 from paddlenlp.trainer import (
@@ -39,6 +40,7 @@ from paddlenlp.transformers import (
     AutoTokenizer,
     CosineAnnealingWithWarmupDecay,
     LinearAnnealingWithWarmupDecay,
+    LlamaAutoDistributedConfig,
     LlamaConfig,
     LlamaForCausalLM3DAuto,
     LlamaForCausalLM3DNet,
@@ -49,7 +51,7 @@ from paddlenlp.utils.log import logger
 
 MODEL_CLASSES = {
     "llama": (LlamaConfig, LlamaForCausalLM3DAuto, LlamaPretrainingCriterion3DAuto),
-    "llama_network": (LlamaConfig, LlamaForCausalLM3DNet, LlamaPretrainingCriterion3DNet),
+    "llama_network": (LlamaConfig, LlamaForCausalLM3DNet, LlamaPretrainingCriterion3DNet, LlamaAutoDistributedConfig),
 }
 
 
@@ -512,7 +514,12 @@ def main():
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
 
-    config_class, model_class, criterion_class = MODEL_CLASSES[model_args.model_type]
+    model_classes = MODEL_CLASSES[model_args.model_type]
+    if len(model_classes) == 3:
+        config_class, model_class, criterion_class = model_classes
+        auto_config_class = None
+    else:
+        config_class, model_class, criterion_class, auto_config_class = model_classes
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name_or_path)
 
@@ -579,6 +586,19 @@ def main():
         model = model_class.from_config(config, dtype="float32")
         criterion = criterion_class(config)
 
+    auto_config = None
+    if auto_config_class is not None:
+        auto_config = auto_config_class(training_args, model_args)
+
+    if training_args.use_intermediate_api:
+        assert auto_config is not None
+        model = parallelize_model(
+            model,
+            dp_config=auto_config.dp_config,
+            mp_config=auto_config.mp_config,
+            pp_config=auto_config.pp_config,
+        )
+
     for param in model.parameters():
         assert not param._is_initialized()
         param.initialize()
@@ -636,6 +656,7 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         optimizers=(None, lr_scheduler),
         tokenizer=tokenizer,
+        auto_config=auto_config,
     )
 
     checkpoint = None

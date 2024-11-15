@@ -76,10 +76,92 @@ try:
 except:
     flash_attention = None
 
+
+from paddle.distributed.auto_parallel.intermediate.tensor_parallel import (
+    ColWiseParallel,
+    RowWiseParallel,
+    SequenceParallelBegin,
+    SequenceParallelDisable,
+    SequenceParallelEnd,
+)
+
 __all__ = [
+    "LlamaAutoDistributedConfig",
     "LlamaForCausalLM3DNet",
     "LlamaPretrainingCriterion3DNet",
 ]
+
+
+class LlamaAutoDistributedConfig:
+    def __init__(self, training_args, model_args):
+        self.dp_config = None
+        self.mp_config = None
+        self.pp_config = None
+        self.training_args = training_args
+        self.model_args = model_args
+        if self.training_args.tensor_parallel_degree > 1:
+            if self.model_args.sequence_parallel:
+                self._init_sp()
+            else:
+                self._init_mp()
+        if self.training_args.pipeline_parallel_degree > 1:
+            self._init_pp()
+
+        world_size = paddle.distributed.get_world_size()
+        dp_size = world_size // (
+            self.training_args.tensor_parallel_degree * self.training_args.pipeline_parallel_degree
+        )
+        if dp_size > 1:
+            # to avoid a circular import
+            from paddlenlp.trainer.trainer_utils import ShardingOption
+
+            level = 0
+            if self.training_args.sharding_parallel_degree > 1:
+                if ShardingOption.SHARD_OP in self.training_args.sharding:
+                    level = 1
+                if ShardingOption.SHARD_GRAD_OP in self.training_args.sharding:
+                    level = 2
+                if ShardingOption.FULL_SHARD in self.training_args.sharding:
+                    level = 3
+            self._init_dp(level)
+
+    def _init_mp(self):
+        self.mp_config = {
+            "parallelize_plan": {
+                "llama.embed_tokens": ColWiseParallel(),
+                "llama.layers.*.self_attn.qkv_proj": ColWiseParallel(),
+                "llama.layers.*.self_attn.o_proj": RowWiseParallel(),
+                "llama.layers.*.mlp.gate_proj": ColWiseParallel(),
+                "llama.layers.*.mlp.up_proj": ColWiseParallel(),
+                "llama.layers.*.mlp.down_proj": RowWiseParallel(),
+                "lm_head.weight": ColWiseParallel(),
+            }
+        }
+
+    def _init_sp(self):
+        self.mp_config = {
+            "parallelize_plan": {
+                "llama.embed_tokens": [
+                    ColWiseParallel(),
+                    SequenceParallelBegin(),
+                ],
+                "llama.layers.*.self_attn.qkv_proj": ColWiseParallel(),
+                "llama.layers.*.self_attn.o_proj": RowWiseParallel(),
+                "llama.layers.*.self_attn": SequenceParallelDisable(),
+                "llama.layers.*.mlp.gate_proj": ColWiseParallel(),
+                "llama.layers.*.mlp.up_proj": ColWiseParallel(),
+                "llama.layers.*.mlp.down_proj": RowWiseParallel(),
+                "llama.layers.*.mlp": SequenceParallelDisable(need_transpose=False),
+                "lm_head.weight": ColWiseParallel(),
+                "lm_head": SequenceParallelEnd(),
+            }
+        }
+
+    def _init_pp(self):
+        self.pp_config = {"split_spec": "llama.layers"}
+
+    def _init_dp(self, level):
+        self.dp_config = {"sharding_level": level}
 
 
 def enable_fuse_ffn_qkv_pass():
@@ -383,13 +465,6 @@ class LlamaAttentionNet(nn.Layer):
             key_states = self.k_proj(hidden_states).reshape(shape=target_key_value_shape)
             value_states = self.v_proj(hidden_states).reshape(shape=target_key_value_shape)
 
-        if self.config.sequence_parallel:
-            # [seq_len, bs, num_head * head_dim] -> [bs, seq_len, num_head * head_dim]  (if sequence_parallel)
-            # FA and rope not support sequence first
-            query_states = paddle.transpose(query_states, [1, 0, 2, 3])
-            key_states = paddle.transpose(key_states, [1, 0, 2, 3])
-            value_states = paddle.transpose(value_states, [1, 0, 2, 3])
-
         kv_seq_len = key_states.shape[-3]
 
         if past_key_value is not None:
@@ -489,9 +564,6 @@ class LlamaAttentionNet(nn.Layer):
             attn_output, attn_weights = outputs
         else:
             attn_output = outputs
-
-        if self.config.sequence_parallel:
-            attn_output = paddle.transpose(attn_output, [1, 0, 2])
 
         # [bs, q_len, num_head * head_dim]
         attn_output = self.o_proj(attn_output)
@@ -875,10 +947,6 @@ class LlamaModelNet(LlamaPretrainedModelNet):
             with paddle.amp.auto_cast(False):
                 inputs_embeds = self.embed_tokens(input_ids)
 
-        if self.config.sequence_parallel:
-            # [B, S, H] -> [S, B, H]
-            inputs_embeds = paddle.transpose(inputs_embeds, [1, 0, 2])
-
         if position_ids is None and self.config.sep_parallel_degree > 1:
             position_ids = paddle.arange(seq_length, dtype="int64").expand((batch_size, seq_length))
         # embed positions
@@ -1144,9 +1212,6 @@ class LlamaForCausalLM3DNet(LlamaPretrainedModelNet):
         )
 
         hidden_states = outputs[0]  # [bs, seq_len, dim]
-        # enter tp region
-        if self.config.sequence_parallel:
-            hidden_states = paddle.transpose(hidden_states, [1, 0, 2])
 
         # if labels is None，means we need full output, instead of tensor_parallel_output
         # tensor_parallel_output is togather with ParallelCrossEntropy
