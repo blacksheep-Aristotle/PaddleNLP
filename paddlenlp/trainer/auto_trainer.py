@@ -69,9 +69,8 @@ class AutoTrainer(Trainer):
 
                 kwargs.update({"criterion": loss_func})
 
-        auto_config = None
-        if kwargs.get("auto_config", None) is not None:
-            auto_config = kwargs.pop("auto_config")
+        auto_config = kwargs.get("auto_config", None)
+        kwargs.pop("auto_config")
 
         self.auto_config = auto_config
 
