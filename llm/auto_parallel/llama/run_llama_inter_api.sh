@@ -1,18 +1,16 @@
 # Copyright (c) 2024 PaddlePaddle Authors. All Rights Reserved.
-#
+# 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-#
+# 
 #     http://www.apache.org/licenses/LICENSE-2.0
-#
+# 
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-# just for debug
 
 set -x
 
@@ -34,8 +32,8 @@ export FLAGS_enable_auto_parallel_align_mode=1
 export FLAGS_enable_pir_api=1
 
 task_name="llama_auto"
-rm -rf output/$task_name/
-rm -rf "log/$task_name""_log"
+rm -rf output
+rm -rf log
 
 export SOT_LOG_LEVEL=4
 export PYTHONPATH=../../../:$PYTHONPATH
@@ -44,7 +42,7 @@ export PYTHONPATH=../../../:$PYTHONPATH
 
 python -u  -m paddle.distributed.launch \
     --gpus "0,1,2,3,4,5,6,7" \
-    --log_dir  "log/$task_name""_log" \
+    --log_dir  "log" \
     ./run_pretrain_auto.py \
     --model_name_or_path "facebook/llama-7b" \
     --tokenizer_name_or_path "facebook/llama-7b" \
@@ -62,7 +60,7 @@ python -u  -m paddle.distributed.launch \
     --max_grad_norm 1.0 \
     --learning_rate 3e-05 \
     --min_learning_rate 3e-06 \
-    --max_steps 1000 \
+    --max_steps 10 \
     --logging_steps 1 \
     --eval_steps 10000 \
     --save_steps 1000 \
