@@ -579,10 +579,6 @@ def main():
         model = model_class.from_config(config, dtype="float32")
         criterion = criterion_class(config)
 
-    for param in model.parameters():
-        assert not param._is_initialized()
-        param.initialize()
-
     if training_args.recompute:
 
         def fn(layer):
@@ -636,6 +632,7 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         optimizers=(None, lr_scheduler),
         tokenizer=tokenizer,
+        model_args=model_args,
     )
 
     checkpoint = None
