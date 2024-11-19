@@ -22,15 +22,14 @@ import paddle
 import paddle.distributed as dist
 import paddle.nn as nn
 from paddle.distributed import fleet
-from paddle.distributed.auto_parallel.intermediate.parallel_base import (
-    parallelize_model_and_optimizer,
-)
-from paddle.distributed.auto_parallel.intermediate.sharded_data_parallel import (
-    sharded_data_parallel,
+from paddle.distributed.auto_parallel.intermediate.parallelize import (
+    parallelize_model,
+    parallelize_optimizer,
 )
 from tqdm.auto import tqdm
 
 from paddlenlp.trainer import Trainer
+from paddlenlp.transformers.model_utils import PretrainedModel
 
 from ..utils.batch_sampler import DistributedBatchSampler as NlpDistributedBatchSampler
 from ..utils.log import logger
@@ -71,6 +70,44 @@ class AutoTrainer(Trainer):
                     return loss
 
                 kwargs.update({"criterion": loss_func})
+
+        if kwargs.get("args", None) is not None and kwargs["args"].use_intermediate_api:
+            model = kwargs.get("model", None)
+            assert model is not None
+            assert isinstance(model, PretrainedModel)
+            for param in model.parameters():
+                assert not param._is_initialized(), "intermediate_api needs lazy init"
+
+            sequence_parallel = False
+            if kwargs.get("model_args", None) is not None:
+                model_args = kwargs.pop("model_args")
+                if hasattr(model_args, "sequence_parallel"):
+                    sequence_parallel = model_args.sequence_parallel
+
+            auto_dist_degree = {
+                "tensor_parallel": kwargs["args"].tensor_parallel_degree > 1,
+                "sequence_parallel": sequence_parallel,
+                "pipeline_parallel": kwargs["args"].pipeline_parallel_degree > 1,
+                "data_sharding_parallel": kwargs["args"].dataset_world_size > 1,
+                "sharding": kwargs["args"].sharding,
+            }
+            auto_dist_config = model._generate_auto_dist_config(auto_dist_degree)
+            self.auto_dist_config = auto_dist_config
+
+            model = parallelize_model(
+                model,
+                dp_config=auto_dist_config["dp_config"],
+                mp_config=auto_dist_config["mp_config"],
+                pp_config=auto_dist_config["pp_config"],
+            )
+
+            kwargs["model"] = model
+
+        model = kwargs["model"]
+        for param in model.parameters():
+            if not param._is_initialized():
+                param.initialize()
+        kwargs["model"] = model
 
         super().__init__(*args, **kwargs)
         assert self.args.enable_auto_parallel
@@ -121,20 +158,18 @@ class AutoTrainer(Trainer):
         return dist_loader
 
     def _wrap_for_auto(self, model, train_dataloader):
-        logger.info(f"Wrapping model for auto paralle useing intermediate api {self.args.use_intermediate_api} ")
+        logger.info(f"Wrapping model for auto parallel using intermediate api {self.args.use_intermediate_api} ")
         dist_loader = self._wrap_for_dist_loader(train_dataloader)
 
         if self.args.use_intermediate_api:
-            level = None
-            if ShardingOption.SHARD_OP in self.args.sharding:
-                level = "os"
-            elif ShardingOption.SHARD_GRAD_OP in self.args.sharding:
-                level = "os_g"
-            elif ShardingOption.FULL_SHARD in self.args.sharding:
-                level = "p_g_os"
-            model, self.optimizer = sharded_data_parallel(model, self.optimizer, level)
-            model, self.optimizer = parallelize_model_and_optimizer(model, self.optimizer)
-
+            assert self.auto_dist_config is not None
+            self.optimizer = parallelize_optimizer(
+                model,
+                self.optimizer,
+                dp_config=self.auto_dist_config["dp_config"],
+                mp_config=self.auto_dist_config["mp_config"],
+                pp_config=self.auto_dist_config["pp_config"],
+            )
         else:
             sharding_parallel_mesh_dimension = self.args.sharding_parallel_mesh_dimension
             if ShardingOption.SHARD_OP in self.args.sharding:
