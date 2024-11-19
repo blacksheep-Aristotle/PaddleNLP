@@ -42,6 +42,14 @@ except ImportError:
         return F.silu(x) * y
 
 
+from paddle.distributed.auto_parallel.intermediate.tensor_parallel import (
+    ColWiseParallel,
+    RowWiseParallel,
+    SequenceParallelBegin,
+    SequenceParallelDisable,
+    SequenceParallelEnd,
+)
+
 from paddlenlp.transformers.conversion_utils import (
     StateDictNameMapping,
     init_name_mappings,
@@ -383,13 +391,6 @@ class LlamaAttentionNet(nn.Layer):
             key_states = self.k_proj(hidden_states).reshape(shape=target_key_value_shape)
             value_states = self.v_proj(hidden_states).reshape(shape=target_key_value_shape)
 
-        if self.config.sequence_parallel:
-            # [seq_len, bs, num_head * head_dim] -> [bs, seq_len, num_head * head_dim]  (if sequence_parallel)
-            # FA and rope not support sequence first
-            query_states = paddle.transpose(query_states, [1, 0, 2, 3])
-            key_states = paddle.transpose(key_states, [1, 0, 2, 3])
-            value_states = paddle.transpose(value_states, [1, 0, 2, 3])
-
         kv_seq_len = key_states.shape[-3]
 
         if past_key_value is not None:
@@ -489,9 +490,6 @@ class LlamaAttentionNet(nn.Layer):
             attn_output, attn_weights = outputs
         else:
             attn_output = outputs
-
-        if self.config.sequence_parallel:
-            attn_output = paddle.transpose(attn_output, [1, 0, 2])
 
         # [bs, q_len, num_head * head_dim]
         attn_output = self.o_proj(attn_output)
@@ -875,10 +873,6 @@ class LlamaModelNet(LlamaPretrainedModelNet):
             with paddle.amp.auto_cast(False):
                 inputs_embeds = self.embed_tokens(input_ids)
 
-        if self.config.sequence_parallel:
-            # [B, S, H] -> [S, B, H]
-            inputs_embeds = paddle.transpose(inputs_embeds, [1, 0, 2])
-
         if position_ids is None and self.config.sep_parallel_degree > 1:
             position_ids = paddle.arange(seq_length, dtype="int64").expand((batch_size, seq_length))
         # embed positions
@@ -1144,9 +1138,6 @@ class LlamaForCausalLM3DNet(LlamaPretrainedModelNet):
         )
 
         hidden_states = outputs[0]  # [bs, seq_len, dim]
-        # enter tp region
-        if self.config.sequence_parallel:
-            hidden_states = paddle.transpose(hidden_states, [1, 0, 2])
 
         # if labels is None，means we need full output, instead of tensor_parallel_output
         # tensor_parallel_output is togather with ParallelCrossEntropy
@@ -1174,3 +1165,40 @@ class LlamaForCausalLM3DNet(LlamaPretrainedModelNet):
         #     hidden_states=outputs.hidden_states,
         #     attentions=outputs.attentions,
         # )
+
+    def auto_dist_config(self, prefix=""):
+        if prefix != "":
+            assert prefix.endswith(".")
+        config = {
+            "sp_config": {
+                "parallelize_plan": {
+                    f"{prefix}llama.embed_tokens": [
+                        ColWiseParallel(),
+                        SequenceParallelBegin(),
+                    ],
+                    f"{prefix}llama.layers.*.self_attn.qkv_proj": ColWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn.o_proj": RowWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn": SequenceParallelDisable(),
+                    f"{prefix}llama.layers.*.mlp.gate_proj": ColWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.up_proj": ColWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.down_proj": RowWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp": SequenceParallelDisable(need_transpose=False),
+                    f"{prefix}lm_head.weight": ColWiseParallel(),
+                    f"{prefix}lm_head": SequenceParallelEnd(),
+                }
+            },
+            "mp_config": {
+                "parallelize_plan": {
+                    f"{prefix}llama.embed_tokens": ColWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn.qkv_proj": ColWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn.o_proj": RowWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.gate_proj": ColWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.up_proj": ColWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.down_proj": RowWiseParallel(),
+                    f"{prefix}lm_head.weight": ColWiseParallel(),
+                }
+            },
+            "pp_config": {"split_spec": f"{prefix}llama.layers"},
+        }
+
+        return config
