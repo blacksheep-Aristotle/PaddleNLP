@@ -71,18 +71,18 @@ class AutoTrainer(Trainer):
 
                 kwargs.update({"criterion": loss_func})
 
+        sequence_parallel = False
+        if kwargs.get("model_args", None) is not None:
+            model_args = kwargs.pop("model_args")
+            if hasattr(model_args, "sequence_parallel"):
+                sequence_parallel = model_args.sequence_parallel
+
         if kwargs.get("args", None) is not None and kwargs["args"].use_intermediate_api:
             model = kwargs.get("model", None)
             assert model is not None
             assert isinstance(model, PretrainedModel)
             for param in model.parameters():
                 assert not param._is_initialized(), "intermediate_api needs lazy init"
-
-            sequence_parallel = False
-            if kwargs.get("model_args", None) is not None:
-                model_args = kwargs.pop("model_args")
-                if hasattr(model_args, "sequence_parallel"):
-                    sequence_parallel = model_args.sequence_parallel
 
             auto_dist_degree = {
                 "tensor_parallel": kwargs["args"].tensor_parallel_degree > 1,
