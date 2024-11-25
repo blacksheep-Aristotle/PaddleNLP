@@ -166,7 +166,6 @@ class AutoTrainer(Trainer):
         if self.args.use_intermediate_api:
             assert self.auto_dist_config is not None
             self.optimizer = parallelize_optimizer(
-                model,
                 self.optimizer,
                 dp_config=self.auto_dist_config["dp_config"],
                 mp_config=self.auto_dist_config["mp_config"],
