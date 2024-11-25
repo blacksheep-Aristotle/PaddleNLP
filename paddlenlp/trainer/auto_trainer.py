@@ -90,6 +90,8 @@ class AutoTrainer(Trainer):
                 "pipeline_parallel": kwargs["args"].pipeline_parallel_degree > 1,
                 "data_sharding_parallel": kwargs["args"].dataset_world_size > 1,
                 "sharding": kwargs["args"].sharding,
+                "sharding_parallel_mesh_dimension": kwargs["args"].sharding_parallel_mesh_dimension,
+                "gradient_accumulation_steps": kwargs["args"].gradient_accumulation_steps,
             }
             auto_dist_config = model._generate_auto_dist_config(auto_dist_degree)
             self.auto_dist_config = auto_dist_config

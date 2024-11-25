@@ -2826,7 +2826,11 @@ class PretrainedModel(Layer, GenerationMixin, ConversionMixin):
                     level = 2
                 if ShardingOption.FULL_SHARD in sharding:
                     level = 3
-            final_config["dp_config"] = {"sharding_level": level}
+            final_config["dp_config"] = {
+                "sharding_level": level,
+                "sharding_parallel_mesh_dimension": auto_dist_degree.get("sharding_parallel_mesh_dimension", None),
+                "gradient_accumulation_steps": auto_dist_degree.get("gradient_accumulation_steps", None),
+            }
 
         return final_config
 
