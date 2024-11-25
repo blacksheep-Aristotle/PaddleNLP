@@ -2826,7 +2826,7 @@ class PretrainedModel(Layer, GenerationMixin, ConversionMixin):
                     level = 2
                 if ShardingOption.FULL_SHARD in sharding:
                     level = 3
-            final_config["dp_config"] = {"level": level}
+            final_config["dp_config"] = {"sharding_level": level}
 
         return final_config
 
