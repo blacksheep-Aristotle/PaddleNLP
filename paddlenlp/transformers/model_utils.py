@@ -2828,7 +2828,7 @@ class PretrainedModel(Layer, GenerationMixin, ConversionMixin):
                     level = 3
             final_config["dp_config"] = {
                 "sharding_level": level,
-                "sharding_parallel_mesh_dimension": auto_dist_degree.get("sharding_parallel_mesh_dimension", None),
+                "sharding_mesh_dim": auto_dist_degree.get("sharding_mesh_dim", None),
             }
 
         return final_config
