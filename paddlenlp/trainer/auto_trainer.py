@@ -90,6 +90,7 @@ class AutoTrainer(Trainer):
                 "pipeline_parallel": kwargs["args"].pipeline_parallel_degree > 1,
                 "data_sharding_parallel": kwargs["args"].dataset_world_size > 1,
                 "sharding": kwargs["args"].sharding,
+                "sharding_mesh_dim": kwargs["args"].sharding_parallel_mesh_dimension,
             }
             auto_dist_config = model._generate_auto_dist_config(auto_dist_degree)
             self.auto_dist_config = auto_dist_config
@@ -164,7 +165,6 @@ class AutoTrainer(Trainer):
         if self.args.use_intermediate_api:
             assert self.auto_dist_config is not None
             self.optimizer = parallelize_optimizer(
-                model,
                 self.optimizer,
                 dp_config=self.auto_dist_config["dp_config"],
                 mp_config=self.auto_dist_config["mp_config"],
