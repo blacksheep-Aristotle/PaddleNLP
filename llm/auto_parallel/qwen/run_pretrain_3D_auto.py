@@ -113,6 +113,10 @@ class PreTrainingArguments(AutoTrainingArguments):
         default=False,
         metadata={"help": "whether use lazy init for model parameters"},
     )
+    use_intermediate_api: bool = field(
+        default=False,
+        metadata={"help": "Weather to use auto_parallel intermediate api"},
+    )
 
     def __post_init__(self):
         super().__post_init__()
@@ -258,6 +262,8 @@ class ModelArguments:
         default=False,
         metadata={"help": "recompute_use_reentrant"},
     )
+    hidden_dropout_prob: float = field(default=0.1, metadata={"help": "The hidden dropout prob."})
+    attention_probs_dropout_prob: float = field(default=0.1, metadata={"help": "The attention hidden dropout prob."})
 
 
 def create_pretrained_dataset(
@@ -363,6 +369,7 @@ def get_train_data_file(args):
 class PretrainingTrainer(AutoTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.is_pretraining = True
 
     def _wrap_for_dist_loader(self, train_dataloader):
         dist_loader = super()._wrap_for_dist_loader(train_dataloader)
@@ -559,7 +566,11 @@ def main():
     # Create the learning_rate sheduler and optimizer
     if training_args.decay_steps is None:
         training_args.decay_steps = training_args.max_steps
-    warmup_steps = training_args.warmup_ratio * training_args.max_steps
+
+    if training_args.warmup_steps > 0:
+        warmup_steps = training_args.warmup_steps
+    else:
+        warmup_steps = training_args.warmup_ratio * training_args.max_steps
 
     lr_scheduler = None
     if training_args.lr_scheduler_type.value == "cosine":

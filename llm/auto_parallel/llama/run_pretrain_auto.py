@@ -107,6 +107,10 @@ class PreTrainingArguments(AutoTrainingArguments):
         default=False,
         metadata={"help": "Weather to run benchmark by autotuner. True for from_scratch and pad_max_length."},
     )
+    use_intermediate_api: bool = field(
+        default=False,
+        metadata={"help": "Weather to use auto_parallel intermediate api"},
+    )
 
     def __post_init__(self):
         super().__post_init__()
@@ -253,6 +257,10 @@ class ModelArguments:
     recompute_use_reentrant: bool = field(
         default=False,
         metadata={"help": "recompute_use_reentrant"},
+    )
+    alibi: bool = field(
+        default=True,
+        metadata={"help": "is use alibi tensor in llama"},
     )
 
 
@@ -510,7 +518,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name_or_path)
 
     config = config_class.from_pretrained(model_args.model_name_or_path)
-
+    config.alibi = model_args.alibi
     config.seq_length = data_args.max_seq_length
     # There are some technique extend RotaryEmbedding context. so don't change max_position_embeddings
     if not model_args.continue_training:
@@ -551,7 +559,7 @@ def main():
     config.use_recompute = training_args.recompute
     config.tensor_parallel_degree = training_args.tensor_parallel_degree
     config.tensor_parallel_rank = training_args.tensor_parallel_rank
-
+    config.sharding_parallel_degree = training_args.sharding_parallel_degree
     if training_args.strategy.pipeline.enable and config.virtual_pp_degree > 1:
         pipeline = training_args.strategy.pipeline
         pipeline.vpp_degree = config.virtual_pp_degree
@@ -635,7 +643,7 @@ def main():
         checkpoint = training_args.resume_from_checkpoint
     elif last_checkpoint is not None:
         checkpoint = last_checkpoint
-
+    print(trainer.model)
     # Training
     if training_args.do_train:
         train_result = trainer.train(resume_from_checkpoint=checkpoint)

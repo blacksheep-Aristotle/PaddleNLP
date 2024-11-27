@@ -22,6 +22,7 @@ from functools import partial
 
 import numpy as np
 import paddle
+import paddle.distributed as dist
 import paddle.distributed.fleet.meta_parallel as mpu
 import paddle.incubate as incubate
 import paddle.nn as nn
@@ -68,6 +69,8 @@ try:
     from paddle.incubate.nn.layer.fused_dropout_add import FusedDropoutAdd
 except:
     FusedDropoutAdd = None
+
+from paddle.autograd import PyLayer
 
 OriginLayerNorm = paddle.nn.LayerNorm
 
@@ -178,6 +181,37 @@ def _expand_2d_mask(mask, dtype, tgt_length):
 def _check_normalized_shape(normalized_shape):
     if isinstance(normalized_shape, (list, tuple)):
         assert len(normalized_shape) == 1
+
+
+class Concat(PyLayer):
+    @staticmethod
+    def forward(ctx, inp, axis, group):
+        inputs = []
+        paddle.distributed.all_gather(inputs, inp, group=group)
+        with paddle.no_grad():
+            cat = paddle.concat(inputs, axis=axis)
+        ctx.args_axis = axis
+        ctx.args_group = group
+        return cat
+
+    @staticmethod
+    def backward(ctx, grad):
+        axis = ctx.args_axis
+        group = ctx.args_group
+        with paddle.no_grad():
+            grads = paddle.split(grad, paddle.distributed.get_world_size(group), axis=axis)
+        grad = grads[paddle.distributed.get_rank(group)]
+        return grad
+
+
+def concat_mp_with_grad(input):
+    hcg = fleet.get_hybrid_communicate_group()
+    mp_degree = hcg.get_model_parallel_world_size()
+    if mp_degree <= 1:
+        return input
+    else:
+        group = hcg.get_model_parallel_group()
+        return Concat.apply(input, -1, group)
 
 
 class MultiHeadAttention(nn.Layer):
@@ -754,10 +788,13 @@ class GPTEmbeddings(nn.Layer):
             ones = paddle.ones(input_shape, dtype="int64")
             seq_length = paddle.cumsum(ones, axis=-1)
             position_ids = seq_length - ones
-
-        position_embeddings = self.position_embeddings(position_ids)
+        # NOTE(zhangweilong):in auto_parallel_align_mode , embedding must run in fp32 , but gpt_model must need bf16. so donnot use amp in here.
+        if dist.in_auto_parallel_align_mode():
+            with paddle.amp.auto_cast(False):
+                position_embeddings = self.position_embeddings(position_ids)
+        else:
+            position_embeddings = self.position_embeddings(position_ids)
         embeddings = inputs_embeddings + position_embeddings
-
         if self.config.sequence_parallel:
             bs, seq_len, hidden_size = embeddings.shape
             # [bs, seq_len, dim] -> [bs * seq_len, dim]
@@ -1332,6 +1369,8 @@ class GPTPretrainingCriterion(paddle.nn.Layer):
             self.loss_func = mpu.ParallelCrossEntropy(ignore_index=config.ignore_index)
         else:
             self.loss_func = paddle.nn.CrossEntropyLoss(reduction="none", ignore_index=config.ignore_index)
+        if dist.in_auto_parallel_align_mode():
+            self.loss_func = paddle.nn.CrossEntropyLoss(reduction="none", ignore_index=config.ignore_index)
 
     def forward(self, prediction_scores, masked_lm_labels, loss_mask=None):
         """
@@ -1355,11 +1394,8 @@ class GPTPretrainingCriterion(paddle.nn.Layer):
         with paddle.amp.auto_cast(False):
             masked_lm_loss = self.loss_func(prediction_scores.astype("float32"), masked_lm_labels.unsqueeze(2))
             # skip ignore_index which loss == 0
-            if loss_mask is None:
-                loss_mask = (masked_lm_loss > 0).astype("float32")
-                loss_mask = loss_mask.reshape([-1])
-            masked_lm_loss = paddle.sum(masked_lm_loss.reshape([-1]) * loss_mask)
-            loss = masked_lm_loss / loss_mask.sum()
+            masked_lm_loss = paddle.masked_select(masked_lm_loss, masked_lm_loss > 0).astype("float32")
+            loss = paddle.mean(masked_lm_loss)
         return loss
 
 
@@ -1513,6 +1549,9 @@ class GPTForCausalLM(GPTPretrainedModel):
 
     """
 
+    _tied_weights_keys = ["lm_head.weight", "lm_head.decoder.weight"]
+    _keys_to_ignore_on_save = [r"lm_head.weight", r"lm_head.decoder.weight"]
+
     def __init__(self, config: GPTConfig):
         super(GPTForCausalLM, self).__init__(config)
         self.gpt = GPTModel(config)
@@ -1538,6 +1577,7 @@ class GPTForCausalLM(GPTPretrainedModel):
         return_dict=False,
     ):
         r"""
+
 
         Args:
             input_ids (Tensor, optional):
@@ -1591,12 +1631,16 @@ class GPTForCausalLM(GPTPretrainedModel):
             hidden_states = outputs
         else:
             hidden_states = outputs[0]
-
         logits = self.lm_head(hidden_states)
+        if dist.in_auto_parallel_align_mode():
+            logits = concat_mp_with_grad(logits)
 
         loss = None
+
         if labels is not None:
+
             loss = self.criterion(logits, labels)
+
             # # Shift so that tokens < n predict n
             # shift_logits = logits[:, :-1, :]
             # shift_labels = labels[:, 1:]
@@ -1611,6 +1655,7 @@ class GPTForCausalLM(GPTPretrainedModel):
 
             outputs = (logits,) + outputs[1:]
             return ((loss,) + outputs) if loss is not None else outputs
+
         return CausalLMOutputWithCrossAttentions(
             loss=loss,
             logits=logits,

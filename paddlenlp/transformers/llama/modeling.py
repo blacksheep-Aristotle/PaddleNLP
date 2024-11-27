@@ -27,17 +27,9 @@ import paddle.distributed.fleet.meta_parallel as mpu
 import paddle.nn.functional as F
 from paddle import Tensor, nn
 from paddle.autograd import PyLayer
-from paddle.distributed import fleet
+from paddle.distributed import fleet, in_auto_parallel_align_mode
 from paddle.distributed.fleet.meta_parallel import get_rng_state_tracker
-
-from paddlenlp.transformers.refined_recompute import (
-    RRColumnParallelLinear,
-    RRColumnSequenceParallelLinear,
-    RRRowParallelLinear,
-    RRRowSequenceParallelLinear,
-    create_skip_config_for_refined_recompute,
-    recompute,
-)
+from paddle.distributed.fleet.utils import recompute
 
 try:
     from paddle.incubate.nn.functional import fused_rotary_position_embedding
@@ -212,6 +204,37 @@ def parallel_matmul(x: Tensor, y: Tensor, transpose_y=False, tensor_parallel_out
         return logits
 
 
+class Concat(PyLayer):
+    @staticmethod
+    def forward(ctx, inp, axis, group):
+        inputs = []
+        paddle.distributed.all_gather(inputs, inp, group=group)
+        with paddle.no_grad():
+            cat = paddle.concat(inputs, axis=axis)
+        ctx.args_axis = axis
+        ctx.args_group = group
+        return cat
+
+    @staticmethod
+    def backward(ctx, grad):
+        axis = ctx.args_axis
+        group = ctx.args_group
+        with paddle.no_grad():
+            grads = paddle.split(grad, paddle.distributed.get_world_size(group), axis=axis)
+        grad = grads[paddle.distributed.get_rank(group)]
+        return grad
+
+
+def concat_mp_with_grad(input):
+    hcg = fleet.get_hybrid_communicate_group()
+    mp_degree = hcg.get_model_parallel_world_size()
+    if mp_degree <= 1:
+        return input
+    else:
+        group = hcg.get_model_parallel_group()
+        return Concat.apply(input, -1, group)
+
+
 def scaled_dot_product_attention(
     query_states,
     config,
@@ -224,7 +247,6 @@ def scaled_dot_product_attention(
     sequence_parallel=False,
     reshard_layer=None,
     npu_is_casual=False,
-    skip_recompute=False,
 ):
     bsz, q_len, num_heads, head_dim = query_states.shape
     _, kv_seq_len, _, _ = value_states.shape
@@ -242,7 +264,6 @@ def scaled_dot_product_attention(
             sequence_parallel,
             reshard_layer,
             npu_is_casual,
-            skip_recompute=skip_recompute,
         )
 
         # Paddle Flash Attention input [ bz, seqlen, nhead, head_dim]
@@ -615,23 +636,9 @@ class LlamaMLP(nn.Layer):
         if config.sequence_parallel:
             ColumnParallelLinear = linear_utils.ColumnSequenceParallelLinear
             RowParallelLinear = linear_utils.RowSequenceParallelLinear
-
-            # NOTE: refined_recompute is only supported when `recompute_use_reentrant=False`
-            if config.recompute and not config.recompute_use_reentrant:
-                if config.skip_recompute_ops.get("mlp_column_ln", False):
-                    ColumnParallelLinear = RRColumnSequenceParallelLinear
-                if config.skip_recompute_ops.get("mlp_row_ln", False):
-                    RowParallelLinear = RRRowSequenceParallelLinear
         else:
             ColumnParallelLinear = linear_utils.ColumnParallelLinear
             RowParallelLinear = linear_utils.RowParallelLinear
-
-            # NOTE: refined_recompute is only supported when `recompute_use_reentrant=False`
-            if config.recompute and not config.recompute_use_reentrant:
-                if config.skip_recompute_ops.get("mlp_column_ln", False):
-                    ColumnParallelLinear = RRColumnParallelLinear
-                if config.skip_recompute_ops.get("mlp_row_ln", False):
-                    RowParallelLinear = RRRowParallelLinear
 
         if config.tensor_parallel_degree > 1:
             if config.fuse_attention_ffn:
@@ -672,6 +679,20 @@ class LlamaMLP(nn.Layer):
 
     def forward(self, x):
         if self.fuse_attention_ffn:
+            # FIXME(yangjianbang): use paddle's native swiglu
+            if get_env_device() == "xpu":
+                try:
+                    import paddle_xpu_nn  # noqa: F821
+
+                    out = self.gate_up_fused_proj(x)
+                    out = paddle_xpu_nn.xpu_swiglu(out, axis=-1, turn=True)
+                    out = self.down_proj(out)
+                    return out
+                except ImportError:
+                    gate_out, up_out = paddle.chunk(self.gate_up_fused_proj(x), chunks=2, axis=-1)
+                    out = self.down_proj(F.silu(gate_out) * up_out)
+                    return out
+
             x = swiglu(self.gate_up_fused_proj(x))
         else:
             x = swiglu(self.gate_proj(x), self.up_proj(x))
@@ -743,22 +764,9 @@ class LlamaAttention(nn.Layer):
         if config.sequence_parallel:
             ColumnParallelLinear = linear_utils.ColumnSequenceParallelLinear
             RowParallelLinear = linear_utils.RowSequenceParallelLinear
-
-            # NOTE: refined_recompute is only supported when `recompute_use_reentrant=False`
-            if config.recompute and not config.recompute_use_reentrant:
-                if config.skip_recompute_ops.get("attention_column_ln", False):
-                    ColumnParallelLinear = RRColumnSequenceParallelLinear
-                if config.skip_recompute_ops.get("attention_row_ln", False):
-                    RowParallelLinear = RRRowSequenceParallelLinear
         else:
             ColumnParallelLinear = linear_utils.ColumnParallelLinear
             RowParallelLinear = linear_utils.RowParallelLinear
-            # NOTE: refined_recompute is only supported when `recompute_use_reentrant=False`
-            if config.recompute and not config.recompute_use_reentrant:
-                if config.skip_recompute_ops.get("attention_column_ln", False):
-                    ColumnParallelLinear = RRColumnParallelLinear
-                if config.skip_recompute_ops.get("attention_row_ln", False):
-                    RowParallelLinear = RRRowParallelLinear
 
         if config.tensor_parallel_degree > 1:
             if self.fuse_attention_qkv:
@@ -857,14 +865,6 @@ class LlamaAttention(nn.Layer):
         self.config = config
 
         self.attn_func = scaled_dot_product_attention
-
-        # NOTE: refined_recompute is only supported when `recompute_use_reentrant=False`
-        if (
-            config.recompute
-            and not config.recompute_use_reentrant
-            and config.skip_recompute_ops.get("flash_attn", False)
-        ):
-            self.attn_func = partial(scaled_dot_product_attention, skip_recompute=True)
 
     def _init_rope(self):
         if (
@@ -1516,12 +1516,7 @@ class LlamaModel(LlamaPretrainedModel):
             )
 
         self.layers = nn.LayerList(
-            [
-                LlamaDecoderLayer(
-                    create_skip_config_for_refined_recompute(i, config), i not in self.no_recompute_layers
-                )
-                for i in range(config.num_hidden_layers)
-            ]
+            [LlamaDecoderLayer(config, i not in self.no_recompute_layers) for i in range(config.num_hidden_layers)]
         )
         self.norm = LlamaRMSNorm(config)
 
@@ -1596,9 +1591,8 @@ class LlamaModel(LlamaPretrainedModel):
             expanded_attn_mask = expanded_attn_mask.astype("float32")
             expanded_attn_mask = paddle.where(expanded_attn_mask, x, y).astype(dtype)
         elif get_env_device() in ["xpu", "gcu"]:
-            min_val = paddle.finfo(dtype).min if get_env_device() == "gcu" else -1e37  # mask value for xpu
             x = paddle.to_tensor(0.0, dtype=dtype)
-            y = paddle.to_tensor(min_val, dtype=dtype)
+            y = paddle.to_tensor(paddle.finfo(dtype).min, dtype=dtype)
             expanded_attn_mask = expanded_attn_mask.astype(dtype)
             expanded_attn_mask = paddle.where(expanded_attn_mask, x, y).astype(dtype)
         else:
@@ -1853,6 +1847,8 @@ class LlamaPretrainingCriterion(paddle.nn.Layer):
             self.loss_func = mpu.ParallelCrossEntropy(ignore_index=self.ignore_index)
         else:
             self.loss_func = paddle.nn.CrossEntropyLoss(reduction="none", ignore_index=self.ignore_index)
+        if in_auto_parallel_align_mode():
+            self.loss_func = paddle.nn.CrossEntropyLoss(reduction="none", ignore_index=self.ignore_index)
 
     def forward(self, prediction_scores, masked_lm_labels):
         if self.enable_parallel_cross_entropy:
@@ -1871,14 +1867,18 @@ class LlamaPretrainingCriterion(paddle.nn.Layer):
             # skip ignore_index which loss == 0
             # masked_lm_loss = masked_lm_loss[masked_lm_loss > 0]
             # loss = paddle.mean(masked_lm_loss)
-            binary_sequence = paddle.where(
-                masked_lm_loss > 0, paddle.ones_like(masked_lm_loss), paddle.zeros_like(masked_lm_loss)
-            )
-            count = paddle.sum(binary_sequence)
-            if count == 0:
-                loss = paddle.sum(masked_lm_loss * binary_sequence)
+            if in_auto_parallel_align_mode():
+                masked_lm_loss = paddle.masked_select(masked_lm_loss, masked_lm_loss > 0).astype("float32")
+                loss = paddle.mean(masked_lm_loss)
             else:
-                loss = paddle.sum(masked_lm_loss * binary_sequence) / count
+                binary_sequence = paddle.where(
+                    masked_lm_loss > 0, paddle.ones_like(masked_lm_loss), paddle.zeros_like(masked_lm_loss)
+                )
+                count = paddle.sum(binary_sequence)
+                if count == 0:
+                    loss = paddle.sum(masked_lm_loss * binary_sequence)
+                else:
+                    loss = paddle.sum(masked_lm_loss * binary_sequence) / count
 
         return loss
 
@@ -1986,7 +1986,6 @@ class LlamaForCausalLM(LlamaPretrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.config = config
-
         self.llama = LlamaModel(config)
         if config.tie_word_embeddings:
             self.lm_head = LlamaLMHead(config, embedding_weights=self.llama.embed_tokens.weight, transpose_y=True)
@@ -2111,7 +2110,8 @@ class LlamaForCausalLM(LlamaPretrainedModel):
         hidden_states = outputs[0]  # [bs, seq_len, dim]
 
         logits = self.lm_head(hidden_states)
-
+        if in_auto_parallel_align_mode():
+            logits = concat_mp_with_grad(logits)
         loss = None
         if labels is not None:
             loss = self.criterion(logits, labels)

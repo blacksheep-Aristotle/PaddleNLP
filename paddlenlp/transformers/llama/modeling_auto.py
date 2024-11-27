@@ -66,7 +66,6 @@ from .modeling import (
     _expand_2d_mask,
     _make_causal_mask,
     apply_rotary_pos_emb,
-    build_alibi_tensor,
     get_triangle_upper_mask,
     repeat_kv,
     rms_norm_fused,
@@ -990,32 +989,38 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
                 global_mesh,
                 [dist.Replicate() for _ in range(len(global_mesh._shape))],
             )
-        # embed positions
-        if not self.config.use_flash_attention and attention_mask is None:
-            # [bs, seq_len]
-            attention_mask = paddle.ones((batch_size, seq_length_with_past), dtype=paddle.bool)
 
-        if self.config.alibi:
-            if attention_mask is None:
-                attention_mask = paddle.ones((batch_size, seq_length_with_past), dtype=paddle.bool)
-            alibi_place = [dist.Replicate() for _ in range(len(global_mesh._shape))]
-            alibi = build_alibi_tensor(attention_mask, self.config.num_attention_heads, dtype=inputs_embeds.dtype)
-            alibi = dist.shard_tensor(alibi, global_mesh, alibi_place)
-        else:
-            alibi = None
-        if self.config.use_flash_attention and not self.config.alibi:
-            # attention_mask in flash_attn is always None for pretrain
-            # atttenton_mask is used in scaled_dot_product_attention with alibi_tensor
-            attention_mask = None
-        else:
-            attention_mask = self._prepare_decoder_attention_mask(
-                attention_mask, (batch_size, seq_length), cache_length, inputs_embeds.dtype
-            )  # [bs, 1, seq_len, seq_len]
-            attention_mask = dist.shard_tensor(
-                attention_mask,
-                global_mesh,
-                [dist.Replicate() for _ in range(len(global_mesh._shape))],
-            )
+        # # embed positions
+        # if not self.config.use_flash_attention and attention_mask is None:
+        #     # [bs, seq_len]
+        #     attention_mask = paddle.ones((batch_size, seq_length_with_past), dtype=paddle.bool)
+
+        # if self.config.alibi:
+        #     if attention_mask is None:
+        #         attention_mask = paddle.ones((batch_size, seq_length_with_past), dtype=paddle.bool)
+        #     alibi_place = [dist.Replicate() for _ in range(len(global_mesh._shape))]
+        #     alibi = build_alibi_tensor(attention_mask, self.config.num_attention_heads, dtype=inputs_embeds.dtype)
+        #     alibi = dist.shard_tensor(alibi, global_mesh, alibi_place)
+        # else:
+        #     alibi = None
+        # if self.config.use_flash_attention and not self.config.alibi:
+        #     # attention_mask in flash_attn is always None for pretrain
+        #     # atttenton_mask is used in scaled_dot_product_attention with alibi_tensor
+        #     attention_mask = None
+        # else:
+        #     attention_mask = self._prepare_decoder_attention_mask(
+        #         attention_mask, (batch_size, seq_length), cache_length, inputs_embeds.dtype
+        #     )  # [bs, 1, seq_len, seq_len]
+        #     attention_mask = dist.shard_tensor(
+        #         attention_mask,
+        #         global_mesh,
+        #         [dist.Replicate() for _ in range(len(global_mesh._shape))],
+        #     )
+
+        # vpp pir temp no support attention_mask
+        attention_mask = None
+        alibi = None
+
         hidden_states = inputs_embeds
         hidden_states = dist.reshard(hidden_states, get_mesh(), self.placements)
 
@@ -1033,6 +1038,7 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
             if not is_pp_enable():
                 position_ids_input = position_ids
                 attention_mask_input = attention_mask
+                alibi_input = alibi
             else:
                 if position_ids is not None:
                     position_ids_input = dist.reshard(
@@ -1054,11 +1060,13 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
                 if alibi is not None:
                     pp_mesh = get_mesh(ipp)
                     alibi_place = [dist.Replicate() for _ in range(len(pp_mesh._shape))]
-                    alibi = dist.reshard(
+                    alibi_input = dist.reshard(
                         alibi,
                         pp_mesh,
                         alibi_place,
                     )
+                else:
+                    alibi_input = alibi
             if idx in self.next_pp_stage_indexes:
                 hidden_states = dist.reshard(
                     hidden_states,
@@ -1080,7 +1088,7 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
                     output_attentions,
                     past_key_value,
                     use_cache,
-                    alibi=alibi,
+                    alibi=alibi_input,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -1090,7 +1098,7 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
                     output_attentions,
                     past_key_value,
                     use_cache,
-                    alibi=alibi,
+                    alibi=alibi_input,
                 )
 
             if type(layer_outputs) is tuple:

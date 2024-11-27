@@ -19,7 +19,6 @@ from typing import List
 
 import paddle
 import paddle.distributed as dist
-import paddle.distributed.fleet.meta_parallel as mpu
 import paddle.nn.functional as F
 from paddle import Tensor, nn
 from paddle.distributed import fleet
@@ -55,12 +54,34 @@ try:
 except:
     fused_rotary_position_embedding = None
 
+try:
+    from paddle.incubate.nn.functional import swiglu
+except ImportError:
+
+    def swiglu(x, y=None):
+        if y is None:
+            x, y = paddle.chunk(x, chunks=2, axis=-1)
+        return F.silu(x) * y
+
+
+def is_pp_enable():
+    mesh = fleet.auto.get_mesh()
+    return "pp" in mesh.dim_names
+
 
 def get_mesh(pp_idx=0):
     mesh = fleet.auto.get_mesh()
     if "pp" in mesh.dim_names:
         mesh = mesh.get_mesh_with_dim("pp")[pp_idx]
     return mesh
+
+
+def global_mesh_starts_with_pp():
+    mesh = fleet.auto.get_mesh()
+    if is_pp_enable():
+        return mesh.get_mesh_with_dim("pp")
+    else:
+        return mesh
 
 
 def parallel_matmul(x: Tensor, y: Tensor, tensor_parallel_output=True):
@@ -126,7 +147,7 @@ class QWenAttentionAuto(nn.Layer):
         self.hidden_size_per_attention_head = self.projection_size // config.num_attention_heads
 
         self.c_attn = nn.Linear(config.hidden_size, 3 * self.projection_size, bias_attr=True)
-        self.c_proj = nn.Linear(config.hidden_size, self.projection_size, bias_attr=not config.no_bias)
+        self.c_proj = nn.Linear(config.hidden_size, self.projection_size, bias_attr=False)
 
         if config.rotary_pct == 1.0:
             self.rotary_ndims = None
@@ -148,11 +169,22 @@ class QWenAttentionAuto(nn.Layer):
         global attention_cnt
         self.attention_cnt = attention_cnt
         attention_cnt += 1
+        self.c_attn.weight = dist.shard_tensor(
+            self.c_attn.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(1)]
+        )
+        self.c_attn.bias = dist.shard_tensor(self.c_attn.bias, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(0)])
+        self.c_proj.weight = dist.shard_tensor(
+            self.c_proj.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(0)]
+        )
 
     def _attn(self, query, key, value, attention_mask=None):
         # Support the flash attention and normal attention
         bsz, q_len, num_heads, head_dim = query.shape
         _, kv_seq_len, _, _ = value.shape
+
+        # if attention_mask is not None:
+        #     attention_mask = dist.reshard(attention_mask,get_mesh(self.ipp),[dist.Shard(0), dist.Replicate()])
+
         if self.config.use_flash_attention and flash_attention is not None:
             # Flash Attention now ignore attention mask
             # Current Flash Attention doesn't support attn maskt
@@ -230,12 +262,15 @@ class QWenAttentionAuto(nn.Layer):
         # # [bz, sql, hid] ==> [bz, sql, 3*hid]
         mixed_x_layer = self.c_attn(hidden_states)
         # [bz, sql, 3*hid] ==> [bz, sql, hid]
+        target_shape = [0, 0, self.num_heads, 3 * self.head_dim]
+
+        mixed_x_layer = paddle.reshape_(mixed_x_layer, target_shape)
         query, key, value = paddle.split(mixed_x_layer, num_or_sections=3, axis=-1)
 
         # [bz, sql, hid] ==> [bz, sql, nh, hdim]
-        query = self._split_heads(query, self.num_heads, self.head_dim)
-        key = self._split_heads(key, self.num_heads, self.head_dim)
-        value = self._split_heads(value, self.num_heads, self.head_dim)
+        # query = self._split_heads(query, self.num_heads, self.head_dim)
+        # key = self._split_heads(key, self.num_heads, self.head_dim)
+        # value = self._split_heads(value, self.num_heads, self.head_dim)
 
         kv_seq_len = hidden_states.shape[1]
         if layer_past:
@@ -310,18 +345,28 @@ class QWenMLPAuto(nn.Layer):
     def __init__(self, config, ipp=None):
         super().__init__()
         ff_dim_in = config.intermediate_size // 2
-        self.w1 = nn.Linear(config.hidden_size, ff_dim_in, bias_attr=not config.no_bias)
-        self.w2 = nn.Linear(config.hidden_size, ff_dim_in, bias_attr=not config.no_bias)
-        self.c_proj = nn.Linear(ff_dim_in, config.hidden_size, bias_attr=not config.no_bias)
+        self.fuse_attention_ffn = config.fuse_attention_ffn
+        self.w1 = nn.Linear(config.hidden_size, ff_dim_in, bias_attr=False)
+        self.w2 = nn.Linear(config.hidden_size, ff_dim_in, bias_attr=False)
+        self.c_proj = nn.Linear(ff_dim_in, config.hidden_size, bias_attr=False)
         self.ipp = ipp
+        self.w1.weight = dist.shard_tensor(self.w1.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(1)])
+        self.w2.weight = dist.shard_tensor(self.w2.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(1)])
+        self.c_proj.weight = dist.shard_tensor(
+            self.c_proj.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(0)]
+        )
 
     def forward(self, hidden_states):
-        # up
-        a1 = self.w1(hidden_states)
-        # gate
-        a2 = self.w2(hidden_states)
-        intermediate_parallel = a1 * F.silu(a2)
+        # # up
+        # a1 = self.w1(hidden_states)
+        # # gate
+        # a2 = self.w2(hidden_states)
+        # intermediate_parallel = a1 * F.silu(a2)
         # down
+        if self.fuse_attention_ffn:
+            intermediate_parallel = swiglu(self.gate_up_fused_proj(hidden_states))
+        else:
+            intermediate_parallel = swiglu(self.w2(hidden_states), self.w1(hidden_states))
         output = self.c_proj(intermediate_parallel)
         return output
 
@@ -330,11 +375,11 @@ class QWenBlockAuto(nn.Layer):
     def __init__(self, config, ipp=None, idx=None):
         super().__init__()
         self.config = config
-        self.ln_1 = QWenRMSNormAuto(config)
-        self.attn = QWenAttentionAuto(config, ipp)
-        self.ln_2 = QWenRMSNormAuto(config)
-        self.mlp = QWenMLPAuto(config, ipp)
         self.ipp = ipp
+        self.ln_1 = QWenRMSNormAuto(config, self.ipp)
+        self.attn = QWenAttentionAuto(config, ipp)
+        self.ln_2 = QWenRMSNormAuto(config, self.ipp)
+        self.mlp = QWenMLPAuto(config, ipp)
         self.idx = idx
 
     def forward(
@@ -385,9 +430,6 @@ class QWenBlockAuto(nn.Layer):
 class QWenPretrainedModelAuto(PretrainedModel):
     config_class = QWenConfig
     base_model_prefix = "qwen"
-
-    def __init__(self, *inputs, **kwargs):
-        super().__init__(*inputs, **kwargs)
 
     @classmethod
     def _get_tensor_parallel_mappings(cls, config, is_split=True):
@@ -497,35 +539,6 @@ class QWenPretrainedModelAuto(PretrainedModel):
         init_name_mappings(mappings)
         return [StateDictNameMapping(*mapping) for mapping in mappings]
 
-    def _init_weights(self, module):
-        """Initialize the weights."""
-        if isinstance(
-            module,
-            (
-                nn.Linear,
-                nn.Embedding,
-                mpu.ColumnParallelLinear,
-                mpu.RowParallelLinear,
-                mpu.VocabParallelEmbedding,
-                QWenLMHeadAuto,
-            ),
-        ):
-            module.weight.set_value(
-                paddle.tensor.normal(mean=0.0, std=self.config.initializer_range, shape=module.weight.shape)
-            )
-            if getattr(module, "bias", None) is not None:
-                module.weight.set_value(paddle.zeros(shape=module.weight.shape, dtype=paddle.get_default_dtype()))
-
-        for name, p in module.named_parameters():
-            if name == "c_proj.weight":
-                p.set_value(
-                    paddle.tensor.normal(
-                        mean=0.0,
-                        std=self.config.initializer_range / math.sqrt(2 * self.config.num_hidden_layers),
-                        shape=p.shape,
-                    )
-                )
-
 
 class QWenModelAuto(QWenPretrainedModelAuto):
     def __init__(self, config):
@@ -538,29 +551,32 @@ class QWenModelAuto(QWenPretrainedModelAuto):
         self.recompute_granularity = config.recompute_granularity
 
         self.wte = nn.Embedding(self.vocab_size, self.embed_dim)
-
+        self.wte.weight = dist.shard_tensor(self.wte.weight, get_mesh(), [dist.Replicate(), dist.Shard(0)])
         self.drop = nn.Dropout(config.emb_dropout_prob)
-
-        def get_layer_ipp(layer_index):
-            mesh = fleet.auto.get_mesh()
-            if "pp" not in mesh.dim_names:
-                return None
-            else:
-                pp_degree = mesh.get_dim_size("pp")
-                layer_per_stage = math.ceil(config.num_hidden_layers / pp_degree)
-                return layer_index // layer_per_stage
 
         self.h = nn.LayerList(
             [
                 QWenBlockAuto(
                     config,
-                    get_layer_ipp(i),
+                    self.get_layer_ipp(i),
                     i,
                 )
                 for i in range(config.num_hidden_layers)
             ]
         )
-        self.ln_f = QWenRMSNormAuto(config)
+        self.ln_f = QWenRMSNormAuto(config, self.get_last_layer_ipp())
+
+    def get_layer_ipp(self, layer_index):
+        mesh = fleet.auto.get_mesh()
+        if "pp" not in mesh.dim_names:
+            return None
+        else:
+            pp_degree = mesh.get_dim_size("pp")
+            layer_per_stage = math.ceil(self.config.num_hidden_layers / pp_degree)
+            return layer_index // layer_per_stage
+
+    def get_last_layer_ipp(self):
+        return self.get_layer_ipp(self.config.num_hidden_layers - 1)
 
     def get_input_embeddings(self):
         return self.wte
@@ -660,27 +676,32 @@ class QWenModelAuto(QWenPretrainedModelAuto):
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
-        if past_key_values is None:
-            past_length = 0
-            past_key_values = tuple([None] * len(self.h))
-        else:
-            past_length = past_key_values[0][0].shape[1]
-
         encoder_attention_mask = None
         if inputs_embeds is None:
-            inputs_embeds = self.wte(input_ids)
+            with paddle.amp.auto_cast(False):
+                inputs_embeds = self.wte(input_ids)
 
         hidden_states = inputs_embeds
 
-        # bool 4D mask
-        attention_mask = self.get_masks(
-            input_shape[0], input_shape[1], past_length, dtype=hidden_states.dtype, padding_mask=attention_mask
-        )
-        # TODO(GhostScreaming): how to fix paddle.finfo?
-        zero = paddle.zeros(attention_mask.shape, dtype=paddle.bfloat16)
-        neg_inf = paddle.full_like(attention_mask, paddle.finfo(paddle.bfloat16).min, dtype=paddle.bfloat16)
-        # dtype 4D mask
-        attention_mask = paddle.where(attention_mask, zero, neg_inf)
+        # # bool 4D mask
+        # if past_key_values is None:
+        #     past_length = 0
+        #     past_key_values = tuple([None] * len(self.h))
+        # else:
+        #     past_length = past_key_values[0][0].shape[1]
+        # attention_mask = self.get_masks(
+        #     input_shape[0], input_shape[1], past_length, dtype=hidden_states.dtype, padding_mask=attention_mask
+        # )
+        # # TODO(GhostScreaming): how to fix paddle.finfo?
+        # zero = paddle.zeros(attention_mask.shape, dtype=paddle.bfloat16)
+        # neg_inf = paddle.full_like(attention_mask, paddle.finfo(paddle.bfloat16).min, dtype=paddle.bfloat16)
+        # # dtype 4D mask
+        # attention_mask = paddle.where(attention_mask, zero, neg_inf)
+
+        # global_mesh = global_mesh_starts_with_pp()
+        # attention_mask = dist.shard_tensor(attention_mask,global_mesh , [dist.Replicate() for _ in range(len(global_mesh._shape))])
+        # NOTE(zhangwl): pir vpp temp no support attention_mask
+        attention_mask = None
 
         hidden_states = self.drop(hidden_states)
         hidden_states = dist.reshard(hidden_states, get_mesh(), [dist.Shard(0), dist.Replicate()])
@@ -708,25 +729,29 @@ class QWenModelAuto(QWenPretrainedModelAuto):
                     get_mesh(block.ipp),
                     [dist.Shard(0), dist.Replicate()],
                 )
-                if position_ids is not None:
-                    position_ids = dist.reshard(
-                        position_ids,
-                        get_mesh(block.ipp),
-                        [dist.Shard(0), dist.Replicate()],
-                    )
-                if attention_mask is not None:
-                    attention_mask = dist.reshard(
-                        attention_mask,
-                        get_mesh(block.ipp),
-                        [dist.Shard(0), dist.Replicate()],
-                    )
+            if position_ids is not None:
+                position_ids_input = dist.reshard(
+                    position_ids,
+                    get_mesh(block.ipp),
+                    [dist.Shard(0), dist.Replicate()],
+                )
+            else:
+                position_ids_input = position_ids
+            if attention_mask is not None:
+                attention_mask_input = dist.reshard(
+                    attention_mask,
+                    get_mesh(block.ipp),
+                    [dist.Replicate(), dist.Replicate()],
+                )
+            else:
+                attention_mask_input = attention_mask
             if self.enable_recompute and self.training and has_gradient and self.recompute_granularity == "full":
                 outputs = self.recompute_training(
                     block,
                     hidden_states,
                     layer_past=layer_past,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
+                    attention_mask=attention_mask_input,
+                    position_ids=position_ids_input,
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
                     use_cache=use_cache,
@@ -736,8 +761,8 @@ class QWenModelAuto(QWenPretrainedModelAuto):
                 outputs = block(
                     hidden_states,
                     layer_past=layer_past,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
+                    attention_mask=attention_mask_input,
+                    position_ids=position_ids_input,
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
                     use_cache=use_cache,
@@ -774,15 +799,16 @@ class QWenModelAuto(QWenPretrainedModelAuto):
 
 
 class QWenLMHeadAuto(nn.Layer):
-    def __init__(self, config: QWenConfig):
+    def __init__(self, config: QWenConfig, ipp=None):
         super(QWenLMHeadAuto, self).__init__()
         self.config = config
         vocab_size = config.vocab_size
-
+        self.ipp = ipp
         self.weight = self.create_parameter(
             shape=[config.hidden_size, vocab_size],
             dtype=paddle.get_default_dtype(),
         )
+        self.weight = dist.shard_tensor(self.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(1)])
 
     def forward(self, hidden_states, tensor_parallel_output=None):
         if tensor_parallel_output is None:
@@ -835,7 +861,7 @@ class QWenForCausalLM3DAuto(QWenPretrainedModelAuto):
     def __init__(self, config):
         super().__init__(config)
         self.qwen = QWenModelAuto(config)
-        self.lm_head = QWenLMHeadAuto(config)
+        self.lm_head = QWenLMHeadAuto(config, self.qwen.get_last_layer_ipp())
 
     def forward(
         self,
@@ -885,7 +911,6 @@ class RotaryEmbedding(nn.Layer):
         super().__init__()
         self.dim = dim
         self.base = base
-        self.inv_freq = 1.0 / (self.base ** (paddle.cast(paddle.arange(0, self.dim, 2), dtype="float32") / self.dim))
         self._seq_len_cached = 0
         self._ntk_alpha_cached = 1.0
 
@@ -893,12 +918,12 @@ class RotaryEmbedding(nn.Layer):
         seqlen = max_seq_len + offset
         if seqlen > self._seq_len_cached or ntk_alpha != self._ntk_alpha_cached:
             base = self.base * ntk_alpha ** (self.dim / (self.dim - 2))
-            self.inv_freq = 1.0 / (base ** (paddle.arange(0, self.dim, 2, dtype=paddle.float32) / self.dim))
+            inv_freq = 1.0 / (base ** (paddle.arange(0, self.dim, 2, dtype=paddle.float32) / self.dim))
             self._seq_len_cached = max(2 * seqlen, 16)
             self._ntk_alpha_cached = ntk_alpha
             seq = paddle.arange(self._seq_len_cached)
             with paddle.amp.auto_cast(enable=False):
-                freqs = paddle.outer(seq.astype(self.inv_freq.dtype), self.inv_freq)
+                freqs = paddle.outer(seq.astype(paddle.float32), inv_freq.astype(paddle.float32))
             emb = paddle.concat([freqs, freqs], axis=-1)
             self.cos_cached = emb.cos()[None, :, None, :]
             self.sin_cached = emb.sin()[None, :, None, :]
@@ -940,7 +965,7 @@ def rms_norm_fused(x_in, w, eps):
 
 
 class QWenRMSNormAuto(nn.Layer):
-    def __init__(self, config):
+    def __init__(self, config, ipp):
         super().__init__()
         self.config = config
         self.eps = config.layer_norm_epsilon
@@ -949,14 +974,14 @@ class QWenRMSNormAuto(nn.Layer):
             dtype=paddle.get_default_dtype(),
             default_initializer=nn.initializer.Constant(1.0),
         )
+        self.weight = dist.shard_tensor(self.weight, get_mesh(ipp), [dist.Replicate(), dist.Replicate()])
+
+    def _norm(self, x):
+        return x * paddle.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
     def forward(self, x):
         if self.config.use_fused_rms_norm:
             return rms_norm_fused(x, self.weight, self.eps)
-        with paddle.amp.auto_cast(False):
-            variance = x.astype("float32").pow(2).mean(-1, keepdim=True)
-            output = paddle.rsqrt(variance + self.eps) * x
 
-        if self.weight.dtype in [paddle.float16, paddle.bfloat16]:
-            output = paddle.cast(output, self.weight.dtype)
+        output = self._norm(x.astype(paddle.float32)).astype(x.dtype)
         return output * self.weight

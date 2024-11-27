@@ -486,7 +486,7 @@ class AutoTrainer(Trainer):
 
         return paddle.io.BatchSampler(
             dataset=self.train_dataset,
-            shuffle=True,
+            shuffle=False,
             batch_size=total_batch_size,
             drop_last=self.args.dataloader_drop_last,
         )
