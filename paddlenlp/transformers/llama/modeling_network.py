@@ -1238,7 +1238,7 @@ class LlamaForCausalLM3DNet(LlamaPretrainedModelNet):
             },
             "mp_config": {
                 "parallelize_plan": {
-                    f"{prefix}llama.embed_tokens": ColWiseParallel(),
+                    f"{prefix}llama.embed_tokens": ColWiseParallel(gather_output=True),
                     f"{prefix}llama.layers.*.self_attn.qkv_proj": ColWiseParallel(),
                     f"{prefix}llama.layers.*.self_attn.q_proj": ColWiseParallel(),
                     f"{prefix}llama.layers.*.self_attn.k_proj": ColWiseParallel(),
