@@ -625,6 +625,62 @@ class LlamaDecoderLayerNet(nn.Layer):
         return outputs
 
 
+class GlobalOutputNet(nn.Layer):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.config = config
+
+    @staticmethod
+    def _prepare_decoder_attention_mask(attention_mask, input_shape, past_key_values_length, dtype):
+        if attention_mask is not None:
+            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+            if len(attention_mask.shape) == 2:
+                expanded_attn_mask = _expand_2d_mask(attention_mask, dtype, tgt_length=input_shape[-1])
+                # For decoding phase in generation, seq_length = 1, we don't need to add causal mask
+                if input_shape[-1] > 1:
+                    combined_attention_mask = _make_causal_mask(
+                        input_shape, past_key_values_length=past_key_values_length
+                    )
+                    expanded_attn_mask = expanded_attn_mask & combined_attention_mask
+            # [bsz, seq_len, seq_len] -> [bsz, 1, seq_len, seq_len]
+            elif len(attention_mask.shape) == 3:
+                expanded_attn_mask = attention_mask.unsqueeze(1).astype("bool")
+            # if attention_mask is already 4-D, do nothing
+            else:
+                expanded_attn_mask = attention_mask
+        else:
+            expanded_attn_mask = _make_causal_mask(input_shape, past_key_values_length=past_key_values_length)
+        # Convert bool attention_mask to float attention mask, which will be added to attention_scores later
+        expanded_attn_mask = paddle.where(expanded_attn_mask, 0.0, paddle.finfo(dtype).min).astype(dtype)
+        return expanded_attn_mask
+
+    def forward(
+        self, position_ids, attention_mask, seq_length, batch_size, seq_length_with_past, cache_length, emb_dtype
+    ):
+        if position_ids is None and self.config.sep_parallel_degree > 1:
+            position_ids = paddle.arange(seq_length, dtype="int64").expand((batch_size, seq_length))
+
+        if not self.config.use_flash_attention and attention_mask is None:
+            # [bs, seq_len]
+            attention_mask = paddle.ones((batch_size, seq_length_with_past), dtype=paddle.bool)
+
+        if self.config.alibi:
+            if attention_mask is None:
+                attention_mask = paddle.ones((batch_size, seq_length_with_past), dtype=paddle.bool)
+            alibi = build_alibi_tensor(attention_mask, self.config.num_attention_heads, dtype=emb_dtype)
+        else:
+            alibi = None
+        if self.config.use_flash_attention and not self.config.alibi:
+            # attention_mask in flash_attn is always None for pretrain
+            # atttenton_mask is used in scaled_dot_product_attention with alibi_tensor
+            attention_mask = None
+        else:
+            attention_mask = self._prepare_decoder_attention_mask(
+                attention_mask, (batch_size, seq_length), cache_length, emb_dtype
+            )  # [bs, 1, seq_len, seq_len]
+        return position_ids, attention_mask, alibi
+
+
 class LlamaPretrainedModelNet(PretrainedModel):
     config_class = LlamaConfig
     base_model_prefix = "llama"
@@ -775,6 +831,7 @@ class LlamaModelNet(LlamaPretrainedModelNet):
             self.vocab_size,
             self.hidden_size,
         )
+        self.global_layer = GlobalOutputNet(config=config)
 
         def get_layer_pp_info(layer_index):
             mesh = fleet.auto.get_mesh()
@@ -804,30 +861,6 @@ class LlamaModelNet(LlamaPretrainedModelNet):
 
     def set_input_embeddings(self, value):
         self.embed_tokens = value
-
-    @staticmethod
-    def _prepare_decoder_attention_mask(attention_mask, input_shape, past_key_values_length, dtype):
-        if attention_mask is not None:
-            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            if len(attention_mask.shape) == 2:
-                expanded_attn_mask = _expand_2d_mask(attention_mask, dtype, tgt_length=input_shape[-1])
-                # For decoding phase in generation, seq_length = 1, we don't need to add causal mask
-                if input_shape[-1] > 1:
-                    combined_attention_mask = _make_causal_mask(
-                        input_shape, past_key_values_length=past_key_values_length
-                    )
-                    expanded_attn_mask = expanded_attn_mask & combined_attention_mask
-            # [bsz, seq_len, seq_len] -> [bsz, 1, seq_len, seq_len]
-            elif len(attention_mask.shape) == 3:
-                expanded_attn_mask = attention_mask.unsqueeze(1).astype("bool")
-            # if attention_mask is already 4-D, do nothing
-            else:
-                expanded_attn_mask = attention_mask
-        else:
-            expanded_attn_mask = _make_causal_mask(input_shape, past_key_values_length=past_key_values_length)
-        # Convert bool attention_mask to float attention mask, which will be added to attention_scores later
-        expanded_attn_mask = paddle.where(expanded_attn_mask, 0.0, paddle.finfo(dtype).min).astype(dtype)
-        return expanded_attn_mask
 
     def forward(
         self,
@@ -873,6 +906,7 @@ class LlamaModelNet(LlamaPretrainedModelNet):
             with paddle.amp.auto_cast(False):
                 inputs_embeds = self.embed_tokens(input_ids)
 
+        """
         if position_ids is None and self.config.sep_parallel_degree > 1:
             position_ids = paddle.arange(seq_length, dtype="int64").expand((batch_size, seq_length))
         # embed positions
@@ -894,6 +928,17 @@ class LlamaModelNet(LlamaPretrainedModelNet):
             attention_mask = self._prepare_decoder_attention_mask(
                 attention_mask, (batch_size, seq_length), cache_length, inputs_embeds.dtype
             )  # [bs, 1, seq_len, seq_len]
+        """
+        position_ids, attention_mask, alibi = self.global_layer(
+            position_ids,
+            attention_mask,
+            seq_length,
+            batch_size,
+            seq_length_with_past,
+            cache_length,
+            inputs_embeds.dtype,
+        )
+        # print(position_ids, attention_mask, alibi)
         hidden_states = inputs_embeds
 
         # decoder layers
@@ -1206,7 +1251,7 @@ class LlamaForCausalLM3DNet(LlamaPretrainedModelNet):
                     f"{prefix}lm_head.weight": ColWiseParallel(),
                 }
             },
-            "pp_config": {"split_spec": f"{prefix}llama.layers"},
+            "pp_config": {"split_spec": f"{prefix}llama.layers", "global_spec": "llama.global_layer"},
         }
 
         return config
