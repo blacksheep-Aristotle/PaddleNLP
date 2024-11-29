@@ -552,8 +552,9 @@ def main():
         if training_args.bf16:
             dtype = "bfloat16"
 
-    model = model_class.from_config(config, dtype=dtype)
-    criterion = criterion_class(config)
+    with paddle.LazyGuard():
+        model = model_class.from_config(config, dtype=dtype)
+        criterion = criterion_class(config)
 
     # load_model(model)
     # shard_model(model)
