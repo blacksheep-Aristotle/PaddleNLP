@@ -63,6 +63,15 @@ except ImportError:
         return F.silu(x) * y
 
 
+from paddle.distributed.auto_parallel.intermediate.tensor_parallel import (
+    ColWiseParallel,
+    RowWiseParallel,
+    SequenceParallelBegin,
+    SequenceParallelDisable,
+    SequenceParallelEnd,
+)
+
+
 def get_mesh(pp_idx=0):
     mesh = fleet.auto.get_mesh()
     if "pp" in mesh.dim_names:
@@ -519,6 +528,7 @@ class QWenModelNet(QWenPretrainedModelNet):
 
         self.wte = nn.Embedding(self.vocab_size, self.embed_dim)
         self.drop = nn.Dropout(config.emb_dropout_prob)
+        self.global_layer = GlobalNet(self.config)
 
         self.h = nn.LayerList(
             [
@@ -583,34 +593,6 @@ class QWenModelNet(QWenPretrainedModelNet):
         )
         return hidden_states
 
-    def get_masks(self, batch_size, seq_length, past_length, dtype, padding_mask=None):
-        # casual mask
-        casual_mask = paddle.tril(paddle.ones([batch_size, 1, seq_length, seq_length], dtype="bool"))
-        if past_length > 0:
-            casual_mask = paddle.concat(
-                [paddle.ones([batch_size, 1, seq_length, past_length], dtype="bool"), casual_mask], axis=-1
-            )
-
-        # seq_mask
-        if padding_mask is None:
-            padding_mask = paddle.ones((batch_size, 1, seq_length, seq_length + past_length), dtype="bool")
-        if len(padding_mask.shape) == 2:
-            # from Tokenizer
-            padding_mask = (
-                padding_mask.unsqueeze(axis=[1, 2])
-                .expand([batch_size, 1, seq_length, seq_length + past_length])
-                .astype("bool")
-            )
-        elif len(padding_mask.shape) == 3:
-            # [batch_size,tgt_length, src_length] -> [batch_size, 1, tgt_length, src_length]
-            padding_mask = padding_mask.unsqueeze(1).astype("bool")
-        elif len(padding_mask.shape) == 4:
-            padding_mask = padding_mask.astype("bool")
-
-        casual_mask = casual_mask & padding_mask
-
-        return casual_mask
-
     def forward(
         self,
         input_ids=None,
@@ -655,15 +637,9 @@ class QWenModelNet(QWenPretrainedModelNet):
 
         hidden_states = inputs_embeds
 
-        # bool 4D mask
-        attention_mask = self.get_masks(
-            input_shape[0], input_shape[1], past_length, dtype=hidden_states.dtype, padding_mask=attention_mask
+        attention_mask, position_ids = self.global_layer(
+            attention_mask, position_ids, input_shape, past_length, hidden_states.dtype
         )
-        # TODO(GhostScreaming): how to fix paddle.finfo?
-        zero = paddle.zeros(attention_mask.shape, dtype=paddle.bfloat16)
-        neg_inf = paddle.full_like(attention_mask, paddle.finfo(paddle.bfloat16).min, dtype=paddle.bfloat16)
-        # dtype 4D mask
-        attention_mask = paddle.where(attention_mask, zero, neg_inf)
 
         hidden_states = self.drop(hidden_states)
         output_shape = input_shape + [
@@ -686,24 +662,24 @@ class QWenModelNet(QWenPretrainedModelNet):
                 outputs = self.recompute_training(
                     block,
                     hidden_states,
-                    layer_past=layer_past,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    encoder_hidden_states=encoder_hidden_states,
-                    encoder_attention_mask=encoder_attention_mask,
-                    use_cache=use_cache,
-                    output_attentions=output_attentions,
+                    layer_past,
+                    attention_mask,
+                    position_ids,
+                    encoder_hidden_states,
+                    encoder_attention_mask,
+                    use_cache,
+                    output_attentions,
                 )
             else:
                 outputs = block(
                     hidden_states,
-                    layer_past=layer_past,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    encoder_hidden_states=encoder_hidden_states,
-                    encoder_attention_mask=encoder_attention_mask,
-                    use_cache=use_cache,
-                    output_attentions=output_attentions,
+                    layer_past,
+                    attention_mask,
+                    position_ids,
+                    encoder_hidden_states,
+                    encoder_attention_mask,
+                    use_cache,
+                    output_attentions,
                 )
 
             if type(outputs) is tuple:
@@ -838,6 +814,93 @@ class QWenForCausalLM3DNet(QWenPretrainedModelNet):
         lm_logits = self.lm_head(hidden_states, tensor_parallel_output=tensor_parallel_output)
 
         return lm_logits
+
+    def auto_dist_config(self, prefix=""):
+        if prefix != "":
+            assert prefix.endswith(".")
+        config = {
+            "sp_config": {
+                "parallelize_plan": {
+                    f"{prefix}qwen.wte": [
+                        RowWiseParallel(),
+                        SequenceParallelBegin(),
+                    ],
+                    f"{prefix}qwen.h.*.attn.c_attn": ColWiseParallel(),
+                    f"{prefix}qwen.h.*.attn.c_proj": RowWiseParallel(),
+                    f"{prefix}qwen.h.*.attn": SequenceParallelDisable(),
+                    f"{prefix}qwen.h.*.mlp.w1": ColWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp.w2": ColWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp.c_proj": RowWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp": SequenceParallelDisable(need_transpose=False),
+                    f"{prefix}lm_head.weight": ColWiseParallel(),
+                    f"{prefix}lm_head": SequenceParallelEnd(),
+                }
+            },
+            "mp_config": {
+                "parallelize_plan": {
+                    f"{prefix}qwen.wte": RowWiseParallel(),
+                    f"{prefix}qwen.h.*.attn.c_attn": ColWiseParallel(),
+                    f"{prefix}qwen.h.*.attn.c_proj": RowWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp.w1": ColWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp.w2": ColWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp.c_proj": RowWiseParallel(),
+                    f"{prefix}lm_head.weight": ColWiseParallel(),
+                }
+            },
+            "pp_config": {
+                "split_spec": f"{prefix}qwen.h",
+                "global_spec": f"{prefix}qwen.global_layer",
+            },
+        }
+
+        return config
+
+
+class GlobalNet(nn.Layer):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.config = config
+
+    def get_masks(self, batch_size, seq_length, past_length, dtype, padding_mask=None):
+        # casual mask
+        casual_mask = paddle.tril(paddle.ones([batch_size, 1, seq_length, seq_length], dtype="bool"))
+        if past_length > 0:
+            casual_mask = paddle.concat(
+                [paddle.ones([batch_size, 1, seq_length, past_length], dtype="bool"), casual_mask], axis=-1
+            )
+
+        # seq_mask
+        if padding_mask is None:
+            padding_mask = paddle.ones((batch_size, 1, seq_length, seq_length + past_length), dtype="bool")
+        if len(padding_mask.shape) == 2:
+            # from Tokenizer
+            padding_mask = (
+                padding_mask.unsqueeze(axis=[1, 2])
+                .expand([batch_size, 1, seq_length, seq_length + past_length])
+                .astype("bool")
+            )
+        elif len(padding_mask.shape) == 3:
+            # [batch_size,tgt_length, src_length] -> [batch_size, 1, tgt_length, src_length]
+            padding_mask = padding_mask.unsqueeze(1).astype("bool")
+        elif len(padding_mask.shape) == 4:
+            padding_mask = padding_mask.astype("bool")
+
+        casual_mask = casual_mask & padding_mask
+
+        return casual_mask
+
+    def forward(self, attention_mask, position_ids, input_shape, past_length, dtype):
+        # bool 4D mask
+        attention_mask = self.get_masks(
+            input_shape[0], input_shape[1], past_length, dtype=dtype, padding_mask=attention_mask
+        )
+        # TODO(GhostScreaming): how to fix paddle.finfo?
+        zero = paddle.zeros(attention_mask.shape, dtype=paddle.bfloat16)
+        neg_inf = paddle.full_like(attention_mask, paddle.finfo(paddle.bfloat16).min, dtype=paddle.bfloat16)
+        # dtype 4D mask
+        attention_mask = paddle.where(attention_mask, zero, neg_inf)
+
+        return attention_mask, position_ids
 
 
 class RotaryEmbedding(nn.Layer):
