@@ -662,24 +662,24 @@ class QWenModelNet(QWenPretrainedModelNet):
                 outputs = self.recompute_training(
                     block,
                     hidden_states,
-                    layer_past=layer_past,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    encoder_hidden_states=encoder_hidden_states,
-                    encoder_attention_mask=encoder_attention_mask,
-                    use_cache=use_cache,
-                    output_attentions=output_attentions,
+                    layer_past,
+                    attention_mask,
+                    position_ids,
+                    encoder_hidden_states,
+                    encoder_attention_mask,
+                    use_cache,
+                    output_attentions,
                 )
             else:
                 outputs = block(
                     hidden_states,
-                    layer_past=layer_past,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    encoder_hidden_states=encoder_hidden_states,
-                    encoder_attention_mask=encoder_attention_mask,
-                    use_cache=use_cache,
-                    output_attentions=output_attentions,
+                    layer_past,
+                    attention_mask,
+                    position_ids,
+                    encoder_hidden_states,
+                    encoder_attention_mask,
+                    use_cache,
+                    output_attentions,
                 )
 
             if type(outputs) is tuple:
