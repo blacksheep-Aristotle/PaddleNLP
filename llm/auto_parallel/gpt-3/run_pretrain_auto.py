@@ -536,9 +536,9 @@ def main():
             dtype = "float16"
         if training_args.bf16:
             dtype = "bfloat16"
-
-    model = model_class.from_config(config, dtype=dtype)
-    criterion = criterion_class(config)
+    with paddle.LazyGuard():
+        model = model_class.from_config(config, dtype=dtype)
+        criterion = criterion_class(config)
     if training_args.recompute:
 
         def fn(layer):
