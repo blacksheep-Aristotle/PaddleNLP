@@ -28,6 +28,10 @@ import paddle.nn as nn
 import paddle.nn.functional as F
 import paddle.tensor as tensor
 from paddle.distributed import fleet
+from paddle.distributed.auto_parallel.intermediate.tensor_parallel import (
+    ColWiseParallel,
+    RowWiseParallel,
+)
 from paddle.distributed.fleet.meta_parallel import get_rng_state_tracker
 from paddle.distributed.fleet.utils import recompute
 from paddle.utils import try_import
@@ -1148,7 +1152,7 @@ class GPTForCausalLMNet(GPTPretrainedModelNet):
     def __init__(self, config: GPTConfig):
         super(GPTForCausalLMNet, self).__init__(config)
         self.gpt = GPTModelNet(config)
-        self.lm_head = GPTLMHeadNet(config, embedding_weights=self.gpt.embeddings.word_embeddings.weight)
+        self.lm_head = GPTLMHeadNet(config, embedding_weights=None)
 
         self.tie_weights()
         self.criterion = GPTPretrainingCriterionNet(config)
