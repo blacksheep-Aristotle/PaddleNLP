@@ -2770,6 +2770,11 @@ class PretrainedModel(Layer, GenerationMixin, ConversionMixin):
                         final_config["pp_config"] = config["pp_config"]
                     else:
                         final_config["pp_config"]["split_spec"] += config["pp_config"]["split_spec"]
+                elif isinstance(config["pp_config"]["split_spec"], (tuple, list)):
+                    if final_config["pp_config"] is None:
+                        final_config["pp_config"] = config["pp_config"]
+                    else:
+                        final_config["pp_config"]["split_spec"] += config["pp_config"]["split_spec"]
 
         if final_config["pp_config"] is not None and len(final_config["pp_config"]["split_spec"]) == 1:
             final_config["pp_config"]["split_spec"] = final_config["pp_config"]["split_spec"][0]
