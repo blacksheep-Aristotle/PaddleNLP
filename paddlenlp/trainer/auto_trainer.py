@@ -97,9 +97,7 @@ class AutoTrainer(Trainer):
 
             model = parallelize_model(
                 model,
-                dp_config=auto_dist_config["dp_config"],
-                mp_config=auto_dist_config["mp_config"],
-                pp_config=auto_dist_config["pp_config"],
+                config=self.auto_dist_config,
             )
 
             kwargs["model"] = model
@@ -166,9 +164,7 @@ class AutoTrainer(Trainer):
             assert self.auto_dist_config is not None
             self.optimizer = parallelize_optimizer(
                 self.optimizer,
-                dp_config=self.auto_dist_config["dp_config"],
-                mp_config=self.auto_dist_config["mp_config"],
-                pp_config=self.auto_dist_config["pp_config"],
+                config=self.auto_dist_config,
             )
         else:
             sharding_parallel_mesh_dimension = self.args.sharding_parallel_mesh_dimension

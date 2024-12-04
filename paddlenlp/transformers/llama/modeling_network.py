@@ -42,13 +42,7 @@ except ImportError:
         return F.silu(x) * y
 
 
-from paddle.distributed.auto_parallel.intermediate.tensor_parallel import (
-    ColWiseParallel,
-    RowWiseParallel,
-    SequenceParallelBegin,
-    SequenceParallelDisable,
-    SequenceParallelEnd,
-)
+import paddle.distributed as dist
 
 from paddlenlp.transformers.conversion_utils import (
     StateDictNameMapping,
@@ -1218,37 +1212,37 @@ class LlamaForCausalLM3DNet(LlamaPretrainedModelNet):
             "sp_config": {
                 "parallelize_plan": {
                     f"{prefix}llama.embed_tokens": [
-                        ColWiseParallel(),
-                        SequenceParallelBegin(),
+                        dist.ColWiseParallel(),
+                        dist.SequenceParallelBegin(),
                     ],
-                    f"{prefix}llama.layers.*.self_attn.qkv_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.self_attn.q_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.self_attn.k_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.self_attn.v_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.self_attn.o_proj": RowWiseParallel(),
-                    f"{prefix}llama.layers.*.self_attn": SequenceParallelDisable(),
-                    f"{prefix}llama.layers.*.mlp.gate_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.mlp.up_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.mlp.gate_up_fused_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.mlp.down_proj": RowWiseParallel(),
-                    f"{prefix}llama.layers.*.mlp": SequenceParallelDisable(need_transpose=False),
-                    f"{prefix}lm_head.weight": ColWiseParallel(),
-                    f"{prefix}lm_head": SequenceParallelEnd(),
+                    f"{prefix}llama.layers.*.self_attn.qkv_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn.q_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn.k_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn.v_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn.o_proj": dist.RowWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn": dist.SequenceParallelDisable(),
+                    f"{prefix}llama.layers.*.mlp.gate_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.up_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.gate_up_fused_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.down_proj": dist.RowWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp": dist.SequenceParallelDisable(need_transpose=False),
+                    f"{prefix}lm_head.weight": dist.ColWiseParallel(),
+                    f"{prefix}lm_head": dist.SequenceParallelEnd(),
                 }
             },
             "mp_config": {
                 "parallelize_plan": {
-                    f"{prefix}llama.embed_tokens": ColWiseParallel(gather_output=True),
-                    f"{prefix}llama.layers.*.self_attn.qkv_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.self_attn.q_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.self_attn.k_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.self_attn.v_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.self_attn.o_proj": RowWiseParallel(),
-                    f"{prefix}llama.layers.*.mlp.gate_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.mlp.up_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.mlp.gate_up_fused_proj": ColWiseParallel(),
-                    f"{prefix}llama.layers.*.mlp.down_proj": RowWiseParallel(),
-                    f"{prefix}lm_head.weight": ColWiseParallel(),
+                    f"{prefix}llama.embed_tokens": dist.ColWiseParallel(gather_output=True),
+                    f"{prefix}llama.layers.*.self_attn.qkv_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn.q_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn.k_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn.v_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.self_attn.o_proj": dist.RowWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.gate_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.up_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.gate_up_fused_proj": dist.ColWiseParallel(),
+                    f"{prefix}llama.layers.*.mlp.down_proj": dist.RowWiseParallel(),
+                    f"{prefix}lm_head.weight": dist.ColWiseParallel(),
                 }
             },
             "pp_config": {"split_spec": f"{prefix}llama.layers", "global_spec": "llama.global_layer"},
