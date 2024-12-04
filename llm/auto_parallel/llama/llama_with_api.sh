@@ -14,35 +14,19 @@
 
 set -x
 
-unset PADDLE_ELASTIC_JOB_ID
-unset PADDLE_TRAINER_ENDPOINTS
-unset DISTRIBUTED_TRAINER_ENDPOINTS
-unset FLAGS_START_PORT
-unset PADDLE_ELASTIC_TIMEOUT
-
-export NNODES=1
-export PADDLE_TRAINERS_NUM=1
-
-export GLOG_v=0
-
 export FLAGS_cudnn_deterministic=1
 export FLAGS_embedding_deterministic=1
 export FLAGS_max_inplace_grad_add=65536
-export FLAGS_enable_auto_parallel_align_mode=1
-export FLAGS_enable_pir_api=1
 
 task_name="llama_auto"
 rm -rf output
-rm -rf log
+rm -rf single
 
-export SOT_LOG_LEVEL=4
 export PYTHONPATH=../../../:$PYTHONPATH
-
-#ulimit -c unlimited
 
 python -u  -m paddle.distributed.launch \
     --gpus "0,1,2,3,4,5,6,7" \
-    --log_dir  "log" \
+    --log_dir  "single" \
     ./run_pretrain_auto.py \
     --model_name_or_path "facebook/llama-7b" \
     --tokenizer_name_or_path "facebook/llama-7b" \
@@ -50,20 +34,21 @@ python -u  -m paddle.distributed.launch \
     --output_dir "./output" \
     --split 949,50,1 \
     --to_static false \
+    --seed 1234 \
     --pipeline_parallel_degree 2 \
     --sharding_parallel_degree 2 \
     --tensor_parallel_degree 2 \
     --virtual_pp_degree 1 \
-    --pipeline_schedule_mode "VPP" \
     --weight_decay 0.01 \
     --warmup_ratio 0.01 \
     --max_grad_norm 1.0 \
     --learning_rate 3e-05 \
     --min_learning_rate 3e-06 \
-    --max_steps 10 \
+    --max_steps 2000 \
     --logging_steps 1 \
     --eval_steps 10000 \
-    --save_steps 1000 \
+    --save_steps 2000 \
+    --auto_parallel_resume_form_hybrid_parallel true \
     --continue_training 0 \
     --do_train true \
     --do_eval false \
@@ -71,13 +56,11 @@ python -u  -m paddle.distributed.launch \
     --disable_tqdm true \
     --save_total_limit 2 \
     --device gpu \
-    --model_type "llama_network" \
-    --use_intermediate_api true \
     --dataloader_num_workers 4 \
     --distributed_dataloader 0 \
     --enable_auto_parallel 1 \
     --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 32 \
+    --gradient_accumulation_steps 8 \
     --per_device_eval_batch_size 1 \
     --recompute false \
     --recompute_use_reentrant true \
@@ -91,11 +74,13 @@ python -u  -m paddle.distributed.launch \
     --fuse_attention_qkv true \
     --use_flash_attention true \
     --use_fused_rope true \
-    --use_fused_rms_norm false \
+    --use_fused_rms_norm true \
     --max_seq_length 4096 \
     --sequence_parallel true \
     --sharding "stage1" \
     --sharding_parallel_config "enable_stage1_tensor_fusion enable_stage1_overlap" \
     --tensor_parallel_config "enable_mp_async_allreduce" \
-    --num_hidden_layers 4 \
-    --auto_parallel_resume_form_hybrid_parallel true \
+    --model_type "llama_network" \
+    --ignore_load_lr_and_optim true \
+    --ignore_save_lr_and_optim true \
+    --use_intermediate_api true \
