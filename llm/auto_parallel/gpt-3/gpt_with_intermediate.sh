@@ -28,7 +28,6 @@ export FLAGS_print_ir=0
 #this optional is for compare train precison
 export FLAGS_cudnn_deterministic=1
 export FLAGS_embedding_deterministic=1 
-export 
 # export NVIDIA_TF32_OVERRIDE=0
 
 export FLAGS_call_stack_level=3
@@ -74,10 +73,10 @@ python -u -m paddle.distributed.launch \
     --do_train \
     --do_eval \
     --device "gpu" \
-    --model_type "gpt" \
-    --use_intermediate_api false \
+    --model_type "gpt_network" \
+    --use_intermediate_api true \
     --sharding "stage1" \
-    --tensor_parallel_degree 2 \
+    --tensor_parallel_degree 1 \
     --pipeline_parallel_degree 2 \
     --virtual_pp_degree 2 \
     --pipeline_schedule_mode "1F1B" \
