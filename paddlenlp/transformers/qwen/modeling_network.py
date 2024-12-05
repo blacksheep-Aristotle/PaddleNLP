@@ -18,6 +18,7 @@ from functools import partial
 from typing import List
 
 import paddle
+import paddle.distributed as dist
 import paddle.nn.functional as F
 from paddle import Tensor, nn
 from paddle.distributed import fleet
@@ -61,15 +62,6 @@ except ImportError:
         if y is None:
             x, y = paddle.chunk(x, chunks=2, axis=-1)
         return F.silu(x) * y
-
-
-from paddle.distributed.auto_parallel.intermediate.tensor_parallel import (
-    ColWiseParallel,
-    RowWiseParallel,
-    SequenceParallelBegin,
-    SequenceParallelDisable,
-    SequenceParallelEnd,
-)
 
 
 def get_mesh(pp_idx=0):
@@ -822,29 +814,29 @@ class QWenForCausalLM3DNet(QWenPretrainedModelNet):
             "sp_config": {
                 "parallelize_plan": {
                     f"{prefix}qwen.wte": [
-                        RowWiseParallel(),
-                        SequenceParallelBegin(),
+                        dist.RowWiseParallel(),
+                        dist.SequenceParallelBegin(),
                     ],
-                    f"{prefix}qwen.h.*.attn.c_attn": ColWiseParallel(),
-                    f"{prefix}qwen.h.*.attn.c_proj": RowWiseParallel(),
-                    f"{prefix}qwen.h.*.attn": SequenceParallelDisable(),
-                    f"{prefix}qwen.h.*.mlp.w1": ColWiseParallel(),
-                    f"{prefix}qwen.h.*.mlp.w2": ColWiseParallel(),
-                    f"{prefix}qwen.h.*.mlp.c_proj": RowWiseParallel(),
-                    f"{prefix}qwen.h.*.mlp": SequenceParallelDisable(need_transpose=False),
-                    f"{prefix}lm_head.weight": ColWiseParallel(),
-                    f"{prefix}lm_head": SequenceParallelEnd(),
+                    f"{prefix}qwen.h.*.attn.c_attn": dist.ColWiseParallel(),
+                    f"{prefix}qwen.h.*.attn.c_proj": dist.RowWiseParallel(),
+                    f"{prefix}qwen.h.*.attn": dist.SequenceParallelDisable(),
+                    f"{prefix}qwen.h.*.mlp.w1": dist.ColWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp.w2": dist.ColWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp.c_proj": dist.RowWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp": dist.SequenceParallelDisable(need_transpose=False),
+                    f"{prefix}lm_head.weight": dist.ColWiseParallel(),
+                    f"{prefix}lm_head": dist.SequenceParallelEnd(),
                 }
             },
             "mp_config": {
                 "parallelize_plan": {
-                    f"{prefix}qwen.wte": RowWiseParallel(),
-                    f"{prefix}qwen.h.*.attn.c_attn": ColWiseParallel(),
-                    f"{prefix}qwen.h.*.attn.c_proj": RowWiseParallel(),
-                    f"{prefix}qwen.h.*.mlp.w1": ColWiseParallel(),
-                    f"{prefix}qwen.h.*.mlp.w2": ColWiseParallel(),
-                    f"{prefix}qwen.h.*.mlp.c_proj": RowWiseParallel(),
-                    f"{prefix}lm_head.weight": ColWiseParallel(),
+                    f"{prefix}qwen.wte": dist.RowWiseParallel(),
+                    f"{prefix}qwen.h.*.attn.c_attn": dist.ColWiseParallel(),
+                    f"{prefix}qwen.h.*.attn.c_proj": dist.RowWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp.w1": dist.ColWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp.w2": dist.ColWiseParallel(),
+                    f"{prefix}qwen.h.*.mlp.c_proj": dist.RowWiseParallel(),
+                    f"{prefix}lm_head.weight": dist.ColWiseParallel(),
                 }
             },
             "pp_config": {
