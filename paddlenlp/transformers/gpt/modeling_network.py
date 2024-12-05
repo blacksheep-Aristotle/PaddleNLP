@@ -28,10 +28,6 @@ import paddle.nn as nn
 import paddle.nn.functional as F
 import paddle.tensor as tensor
 from paddle.distributed import fleet
-from paddle.distributed.auto_parallel.intermediate.tensor_parallel import (
-    ColWiseParallel,
-    RowWiseParallel,
-)
 from paddle.distributed.fleet.meta_parallel import get_rng_state_tracker
 from paddle.distributed.fleet.utils import recompute
 from paddle.utils import try_import
@@ -1326,11 +1322,11 @@ class GPTForCausalLMNet(GPTPretrainedModelNet):
         config = {
             "mp_config": {
                 "parallelize_plan": {
-                    f"{prefix}gpt.embeddings.position_embeddings": ColWiseParallel(),
-                    f"{prefix}gpt.decoder.layers.*.self_attn.qkv_proj": ColWiseParallel(),
-                    f"{prefix}gpt.decoder.layers.*.self_attn.out_proj": RowWiseParallel(),
-                    f"{prefix}gpt.decoder.layers.*.linear1": ColWiseParallel(),
-                    f"{prefix}gpt.decoder.layers.*.linear2": RowWiseParallel(),
+                    f"{prefix}gpt.embeddings.position_embeddings": dist.ColWiseParallel(),
+                    f"{prefix}gpt.decoder.layers.*.self_attn.qkv_proj": dist.ColWiseParallel(),
+                    f"{prefix}gpt.decoder.layers.*.self_attn.out_proj": dist.RowWiseParallel(),
+                    f"{prefix}gpt.decoder.layers.*.linear1": dist.ColWiseParallel(),
+                    f"{prefix}gpt.decoder.layers.*.linear2": dist.RowWiseParallel(),
                 }
             },
             "pp_config": {
