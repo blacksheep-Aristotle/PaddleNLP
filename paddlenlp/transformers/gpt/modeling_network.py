@@ -626,6 +626,9 @@ class GPTEmbeddingsNet(nn.Layer):
             config.max_position_embeddings,
             config.hidden_size,
         )
+        self.word_embeddings.weight = dist.shard_tensor(
+            self.word_embeddings.weight, get_mesh(), [dist.Replicate(), dist.Replicate()]
+        )
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, input_ids, position_ids=None, inputs_embeddings=None):
@@ -1147,7 +1150,7 @@ class GPTLMHeadNet(nn.Layer):
 
         if self.config.sequence_parallel:
             hidden_states = paddle.reshape(hidden_states, [-1, self.config.seq_length, self.config.hidden_size])
-        y = dist.reshard(self.weight, get_mesh(-1), [dist.Replicate(), dist.Replicate()])
+        y = dist.reshard(self.weight, get_mesh(-1), [dist.Replicate(), dist.Shard(0)])
         logits = paddle.matmul(hidden_states, y, transpose_y=self.transpose_y)
         return logits
 
@@ -1169,7 +1172,7 @@ class GPTForCausalLMNet(GPTPretrainedModelNet):
     def __init__(self, config: GPTConfig):
         super(GPTForCausalLMNet, self).__init__(config)
         self.gpt = GPTModelNet(config)
-        self.lm_head = GPTLMHeadNet(config, embedding_weights=None)
+        self.lm_head = GPTLMHeadNet(config, embedding_weights=self.gpt.embeddings.word_embeddings.weight)
 
         self.tie_weights()
         self.criterion = GPTPretrainingCriterionNet(config)
