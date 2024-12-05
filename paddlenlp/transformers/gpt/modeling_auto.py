@@ -653,7 +653,7 @@ class GPTEmbeddingsAuto(nn.Layer):
             config.hidden_size,
         )
         self.word_embeddings.weight = dist.shard_tensor(
-            self.word_embeddings.weight, get_mesh(), [dist.Replicate(), dist.Shard(1)]
+            self.word_embeddings.weight, get_mesh(), [dist.Replicate(), dist.Replicate()]
         )
         self.position_embeddings.weight = dist.shard_tensor(
             self.position_embeddings.weight, get_mesh(), [dist.Replicate(), dist.Shard(1)]
@@ -1184,9 +1184,10 @@ class GPTLMHeadAuto(nn.Layer):
                     dtype=paddle.get_default_dtype(),
                 )
             # Must set distributed attr for Tensor Parallel !
-            self.weight.is_distributed = True if (vocab_size != config.vocab_size) else False
-            if self.weight.is_distributed:
-                self.weight.split_axis = 0
+            # self.weight.is_distributed = True if (vocab_size != config.vocab_size) else False
+            # if self.weight.is_distributed:
+            #     self.weight.split_axis = 0
+            self.weight = dist.shard_tensor(self.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(0)])
 
     def forward(self, hidden_states, tensor_parallel_output=None):
 
