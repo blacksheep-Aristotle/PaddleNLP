@@ -960,7 +960,7 @@ class LlamaModelNet(LlamaPretrainedModelNet):
                     output_attentions,
                     past_key_value,
                     use_cache,
-                    alibi=alibi,
+                    alibi,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -970,7 +970,7 @@ class LlamaModelNet(LlamaPretrainedModelNet):
                     output_attentions,
                     past_key_value,
                     use_cache,
-                    alibi=alibi,
+                    alibi,
                 )
 
             if type(layer_outputs) is tuple:
