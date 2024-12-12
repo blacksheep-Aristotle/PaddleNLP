@@ -622,9 +622,6 @@ class GPTEmbeddingsNet(nn.Layer):
             config.max_position_embeddings,
             config.hidden_size,
         )
-        self.word_embeddings.weight = dist.shard_tensor(
-            self.word_embeddings.weight, get_mesh(), [dist.Replicate(), dist.Replicate()]
-        )
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, input_ids, position_ids=None, inputs_embeddings=None):
@@ -1121,33 +1118,16 @@ class GPTLMHeadNet(nn.Layer):
             self.transpose_y = True
             self.weight = embedding_weights
         else:
-            if config.tensor_parallel_degree > 1:
-                vocab_size = config.vocab_size // config.tensor_parallel_degree
-            else:
-                vocab_size = config.vocab_size
-
-            if vocab_size != config.vocab_size:
-                with get_rng_state_tracker().rng_state():
-                    self.weight = self.create_parameter(
-                        shape=[vocab_size, config.hidden_size],
-                        dtype=paddle.get_default_dtype(),
-                    )
-            else:
-                self.weight = self.create_parameter(
-                    shape=[vocab_size, config.hidden_size],
-                    dtype=paddle.get_default_dtype(),
-                )
-            # Must set distributed attr for Tensor Parallel !
-            self.weight.is_distributed = True if (vocab_size != config.vocab_size) else False
-            if self.weight.is_distributed:
-                self.weight.split_axis = 0
+            self.weight = self.create_parameter(
+                shape=[config.vocab_size, config.hidden_size],
+                dtype=paddle.get_default_dtype(),
+            )
 
     def forward(self, hidden_states, tensor_parallel_output=None):
 
         if self.config.sequence_parallel:
             hidden_states = paddle.reshape(hidden_states, [-1, self.config.seq_length, self.config.hidden_size])
-        y = dist.reshard(self.weight, get_mesh(-1), [dist.Replicate(), dist.Shard(0)])
-        logits = paddle.matmul(hidden_states, y, transpose_y=self.transpose_y)
+        logits = paddle.matmul(hidden_states, self.weight, transpose_y=self.transpose_y)
         return logits
 
 
@@ -1322,11 +1302,13 @@ class GPTForCausalLMNet(GPTPretrainedModelNet):
         config = {
             "mp_config": {
                 "parallelize_plan": {
+                    f"{prefix}gpt.embeddings.word_embeddings": dist.ColWiseParallel(),
                     f"{prefix}gpt.embeddings.position_embeddings": dist.ColWiseParallel(),
                     f"{prefix}gpt.decoder.layers.*.self_attn.qkv_proj": dist.ColWiseParallel(),
                     f"{prefix}gpt.decoder.layers.*.self_attn.out_proj": dist.RowWiseParallel(),
                     f"{prefix}gpt.decoder.layers.*.linear1": dist.ColWiseParallel(),
                     f"{prefix}gpt.decoder.layers.*.linear2": dist.RowWiseParallel(),
+                    f"{prefix}lm_head.weight": dist.RowWiseParallel(),
                 }
             },
             "pp_config": {
