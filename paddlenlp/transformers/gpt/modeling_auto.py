@@ -102,12 +102,16 @@ def fast_layer_norm(input, weight, bias, eps):
 
 
 class GPTLayerNorm(nn.LayerNorm):
-    def __init__(self, config, normalized_shape, epsilon=1e-05, weight_attr=None, bias_attr=None, name=None):
+    def __init__(self, config, normalized_shape, ipp=-1, epsilon=1e-05, weight_attr=None, bias_attr=None, name=None):
         super().__init__(
             normalized_shape=normalized_shape, epsilon=epsilon, weight_attr=weight_attr, bias_attr=bias_attr
         )
         self.config = config
+        self.ipp = ipp
         self._check_normalized_shape(self._normalized_shape)
+        self.weight = dist.shard_tensor(self.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Replicate()])
+        if self.bias is not None:
+            self.bias = dist.shard_tensor(self.bias, get_mesh(self.ipp), [dist.Replicate(), dist.Replicate()])
 
     def _check_normalized_shape(self, normalized_shape):
         if isinstance(normalized_shape, (list, tuple)):
@@ -202,6 +206,9 @@ class MultiHeadAttentionAuto(nn.Layer):
         self.out_proj = nn.Linear(config.hidden_size, config.hidden_size, bias_attr=True)
         self.out_proj.weight = dist.shard_tensor(
             self.out_proj.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(0)]
+        )
+        self.out_proj.bias = dist.shard_tensor(
+            self.out_proj.bias, get_mesh(self.ipp), [dist.Replicate(), dist.Replicate()]
         )
 
     def _fuse_prepare_qkv(self, query, use_cache=False, past_key_value=None):
@@ -527,9 +534,10 @@ class GPTDecoderLayerAuto(nn.Layer):
         self.linear1.weight = dist.shard_tensor(self.linear1.weight, get_mesh(ipp), [dist.Replicate(), dist.Shard(1)])
         self.linear1.bias = dist.shard_tensor(self.linear1.bias, get_mesh(ipp), [dist.Replicate(), dist.Shard(0)])
         self.linear2.weight = dist.shard_tensor(self.linear2.weight, get_mesh(ipp), [dist.Replicate(), dist.Shard(0)])
+        self.linear2.bias = dist.shard_tensor(self.linear2.bias, get_mesh(ipp), [dist.Replicate(), dist.Replicate()])
         # fix : change nn.LayerNorm(config.hidden_size, epsilon=1e-5, bias_attr=True) to GPTLayerNorm()
-        self.norm1 = GPTLayerNorm(config, config.hidden_size, epsilon=1e-5, bias_attr=True)
-        self.norm2 = GPTLayerNorm(config, config.hidden_size, epsilon=1e-5, bias_attr=True)
+        self.norm1 = GPTLayerNorm(config, config.hidden_size, self.ipp, epsilon=1e-5, bias_attr=True)
+        self.norm2 = GPTLayerNorm(config, config.hidden_size, self.ipp, epsilon=1e-5, bias_attr=True)
 
         if config.sequence_parallel:
             mark_as_sequence_parallel_parameter(self.norm1.weight)
