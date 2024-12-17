@@ -11,8 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 import math
+import os
 import warnings
 from functools import partial
 from typing import List
@@ -82,6 +82,17 @@ def get_triangle_upper_mask(x, mask=None):
     mask = paddle.triu(mask, diagonal=1)
     mask.stop_gradient = True
     return mask
+
+
+def enable_fuse_ffn_qkv_pass():
+    if os.getenv("FLAGS_enable_fused_ffn_qkv_pass") in [
+        "True",
+        "true",
+        "1",
+    ]:
+        return True
+    else:
+        return False
 
 
 attention_cnt = 0
@@ -304,12 +315,20 @@ class QWenMLPAuto(nn.Layer):
         super().__init__()
         ff_dim_in = config.intermediate_size // 2
         self.fuse_attention_ffn = config.fuse_attention_ffn
-        self.w1 = nn.Linear(config.hidden_size, ff_dim_in, bias_attr=not config.no_bias)
-        self.w2 = nn.Linear(config.hidden_size, ff_dim_in, bias_attr=not config.no_bias)
-        self.c_proj = nn.Linear(ff_dim_in, config.hidden_size, bias_attr=not config.no_bias)
         self.ipp = ipp
-        self.w1.weight = dist.shard_tensor(self.w1.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(1)])
-        self.w2.weight = dist.shard_tensor(self.w2.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(1)])
+        if config.fuse_attention_ffn and not enable_fuse_ffn_qkv_pass():
+            self.gate_up_fused_proj = nn.Linear(config.hidden_size, ff_dim_in * 2, bias_attr=not config.no_bias)
+            self.gate_up_fused_proj.weight = dist.shard_tensor(
+                self.gate_up_fused_proj.weight,
+                get_mesh(self.ipp),
+                [dist.Replicate(), dist.Shard(1)],
+            )
+        else:
+            self.w1 = nn.Linear(config.hidden_size, ff_dim_in, bias_attr=not config.no_bias)
+            self.w2 = nn.Linear(config.hidden_size, ff_dim_in, bias_attr=not config.no_bias)
+            self.w1.weight = dist.shard_tensor(self.w1.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(1)])
+            self.w2.weight = dist.shard_tensor(self.w2.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(1)])
+        self.c_proj = nn.Linear(ff_dim_in, config.hidden_size, bias_attr=not config.no_bias)
         self.c_proj.weight = dist.shard_tensor(
             self.c_proj.weight, get_mesh(self.ipp), [dist.Replicate(), dist.Shard(0)]
         )
@@ -321,7 +340,7 @@ class QWenMLPAuto(nn.Layer):
         # a2 = self.w2(hidden_states)
         # intermediate_parallel = a1 * F.silu(a2)
         # down
-        if self.fuse_attention_ffn:
+        if self.fuse_attention_ffn and not enable_fuse_ffn_qkv_pass():
             intermediate_parallel = swiglu(self.gate_up_fused_proj(hidden_states))
         else:
             intermediate_parallel = swiglu(self.w2(hidden_states), self.w1(hidden_states))
