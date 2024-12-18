@@ -95,6 +95,11 @@ def enable_fuse_ffn_qkv_pass():
         return False
 
 
+def get_use_casual_mask():
+    """Get the value of the 'USE_CASUAL_MASK' environment variable."""
+    return os.getenv("USE_CASUAL_MASK", "False") == "True"
+
+
 attention_cnt = 0
 
 
@@ -671,16 +676,20 @@ class QWenModelAuto(QWenPretrainedModelAuto):
 
         hidden_states = inputs_embeds
 
-        # bool 4D mask
-        attention_mask = self.get_masks(
-            input_shape[0], input_shape[1], past_length, dtype=hidden_states.dtype, padding_mask=attention_mask
-        )
-        # TODO(GhostScreaming): how to fix paddle.finfo?
-        zero = paddle.zeros(attention_mask.shape, dtype=paddle.bfloat16)
-        neg_inf = paddle.full_like(attention_mask, paddle.finfo(paddle.bfloat16).min, dtype=paddle.bfloat16)
-        # dtype 4D mask
-        attention_mask = paddle.where(attention_mask, zero, neg_inf)
-        attention_mask = dist.shard_tensor(attention_mask, get_mesh(), [dist.Replicate(), dist.Replicate()])
+        use_casual_mask = get_use_casual_mask()
+        if use_casual_mask:
+            attention_mask = None
+        else:
+            # bool 4D mask
+            attention_mask = self.get_masks(
+                input_shape[0], input_shape[1], past_length, dtype=hidden_states.dtype, padding_mask=attention_mask
+            )
+            # TODO(GhostScreaming): how to fix paddle.finfo?
+            zero = paddle.zeros(attention_mask.shape, dtype=paddle.bfloat16)
+            neg_inf = paddle.full_like(attention_mask, paddle.finfo(paddle.bfloat16).min, dtype=paddle.bfloat16)
+            # dtype 4D mask
+            attention_mask = paddle.where(attention_mask, zero, neg_inf)
+            attention_mask = dist.shard_tensor(attention_mask, get_mesh(), [dist.Replicate(), dist.Replicate()])
         hidden_states = self.drop(hidden_states)
         hidden_states = dist.reshard(hidden_states, get_mesh(), [dist.Shard(0), dist.Replicate()])
         output_shape = input_shape + [
