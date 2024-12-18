@@ -817,7 +817,7 @@ function llama_align_dygraph_dy2st_pir_auto_bs2_bf16_DP2-MP2-PP1-SP() {
             loss_base=9.16783295
             loss_md5_base=8ea72495fba4e1b9ba004b4431e27218
             if [ $IS_A100 -ne 0 ] && [ $to_static -eq 0 ];then
-                loss_base=9.37966919
+                loss_base=9.37982635
             elif [ $IS_A100 -ne 0 ] && [ $to_static -eq 1 ];then
                 loss_base=9.38012543
             fi
@@ -2227,11 +2227,11 @@ function llm_gpt_dygraph_auto_bs8_fp16_DP2-MP2-PP2_intermediate() {
     mem=-1
     echo "result: loss=$loss ips=$ips mem=$mem loss_md5=$loss_md5"
     # loss_base=10.58456802     # note: need to debug
-    loss_base=10.57452488
+    loss_base=10.566679
     ips_base=-1
     mem_base=-1
     if [ $IS_A100 -ne 0 ];then
-        loss_base=10.57415771 # after add dropout spmd
+        loss_base=10.56109619 # after add dropout spmd
     fi
     check_result $FUNCNAME ${loss_base} ${loss} ${ips_base} ${ips} ${mem_base} ${mem}
     echo "=========== $FUNCNAME run  end ==========="

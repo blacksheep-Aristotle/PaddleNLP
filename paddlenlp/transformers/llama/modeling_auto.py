@@ -1087,7 +1087,7 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
                     output_attentions,
                     past_key_value,
                     use_cache,
-                    alibi=alibi_input,
+                    alibi_input,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -1097,7 +1097,7 @@ class LlamaModelAuto(LlamaPretrainedModelAuto):
                     output_attentions,
                     past_key_value,
                     use_cache,
-                    alibi=alibi_input,
+                    alibi_input,
                 )
 
             if type(layer_outputs) is tuple:
