@@ -114,10 +114,7 @@ function _train(){
                 --use_recompute ${use_recompute}\
                 --sharding_stage ${sharding_stage}\
                 --sharding_offload ${sharding_offload}\
-                --fuse_transformer True \
-                --sharding_parallel_config 'enable_stage1_tensor_fusion enable_stage1_overlap' \
-                --tensor_parallel_config 'enable_mp_async_allreduce' \
-                --pipeline_parallel_config 'enable_sharding_comm_overlap enable_dp_comm_overlap enable_overlap_p2p_comm' "
+                --fuse_transformer True"
     if [ ${PADDLE_TRAINER_ID} ]
     then
         PADDLE_RANK_OPTION=" --rank ${PADDLE_TRAINER_ID}"
@@ -144,7 +141,7 @@ function _train(){
                 run_pretrain.py ${train_cmd}"
             workerlog_id=0
             ;;
-        DP1-MP2-PP4|DP1-MP4-PP2|DP2-MP2-PP2|DP2-MP8-PP2|DP4-MP8-PP1|DP4-MP2-PP4|DP1-MP8-PP4) echo "run run_mode: ${run_mode}"
+        DP1-MP2-PP4|DP1-MP4-PP2|DP2-MP2-PP2|DP2-MP8-PP2|DP4-MP8-PP1|DP1-MP8-PP4) echo "run run_mode: ${run_mode}"
             train_cmd="python -m paddle.distributed.launch --log_dir=./mylog --gpus=0,1,2,3,4,5,6,7 ${PADDLE_RANK_OPTION}\
                 run_pretrain.py ${train_cmd}"
             workerlog_id=0
