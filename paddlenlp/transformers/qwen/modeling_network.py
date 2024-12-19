@@ -14,8 +14,6 @@
 
 import math
 import warnings
-from functools import partial
-from typing import List
 
 import paddle
 import paddle.distributed as dist
@@ -29,7 +27,6 @@ from paddlenlp.transformers.model_outputs import BaseModelOutputWithPast
 from paddlenlp.transformers.model_utils import PretrainedModel
 from paddlenlp.utils.log import logger
 
-from ...utils.converter import StateDictNameMapping, init_name_mappings
 from .configuration import QWenConfig
 
 __all__ = [
@@ -399,114 +396,6 @@ class QWenPretrainedModelNet(PretrainedModel):
     config_class = QWenConfig
     base_model_prefix = "qwen"
 
-    @classmethod
-    def _get_tensor_parallel_mappings(cls, config, is_split=True):
-
-        from paddlenlp.transformers.conversion_utils import split_or_merge_func
-
-        fn = split_or_merge_func(
-            is_split=is_split,
-            tensor_parallel_degree=config.tensor_parallel_degree,
-            tensor_parallel_rank=config.tensor_parallel_rank,
-            num_attention_heads=config.num_attention_heads,
-        )
-
-        def get_tensor_parallel_split_mappings(num_hidden_layers):
-            final_actions = {}
-            base_actions = {
-                # Column Linear
-                "lm_head.weight": partial(fn, is_column=True),
-                "qwen.h.0.mlp.w2.weight": partial(fn, is_column=True),
-                "qwen.h.0.mlp.w1.weight": partial(fn, is_column=True),
-                "qwen.h.0.attn.c_attn.weight": partial(fn, is_column=True, is_naive_3fuse=True),
-                "qwen.h.0.attn.c_attn.bias": partial(fn, is_column=True, is_naive_3fuse=True),
-                # Row Linear
-                "qwen.wte.weight": partial(fn, is_column=False),
-                "qwen.h.0.mlp.c_proj.weight": partial(fn, is_column=False),
-                "qwen.h.0.attn.c_proj.weight": partial(fn, is_column=False),
-            }
-            for key, action in base_actions.items():
-                if "h.0." in key:
-                    for i in range(num_hidden_layers):
-                        final_actions[key.replace("h.0.", f"h.{i}.")] = action
-                final_actions[key] = action
-
-            return final_actions
-
-        mappings = get_tensor_parallel_split_mappings(config.num_hidden_layers)
-
-        return mappings
-
-    @classmethod
-    def _get_name_mappings(cls, config: QWenConfig) -> List[StateDictNameMapping]:
-        mappings = [
-            "wte.weight",
-            "ln_f.weight",
-        ]
-
-        for layer_index in range(config.num_hidden_layers):
-            layer_mappings = [
-                [
-                    f"h.{layer_index}.ln_1.weight",
-                    f"h.{layer_index}.ln_1.weight",
-                ],
-                [
-                    f"h.{layer_index}.attn.c_attn.weight",
-                    f"h.{layer_index}.attn.c_attn.weight",
-                    "transpose",
-                ],
-                [
-                    f"h.{layer_index}.attn.c_attn.bias",
-                    f"h.{layer_index}.attn.c_attn.bias",
-                ],
-                [
-                    f"h.{layer_index}.attn.c_proj.weight",
-                    f"h.{layer_index}.attn.c_proj.weight",
-                    "transpose",
-                ],
-                [
-                    f"h.{layer_index}.ln_2.weight",
-                    f"h.{layer_index}.ln_2.weight",
-                ],
-                [
-                    f"h.{layer_index}.mlp.w1.weight",
-                    f"h.{layer_index}.mlp.w1.weight",
-                    "transpose",
-                ],
-                [
-                    f"h.{layer_index}.mlp.w2.weight",
-                    f"h.{layer_index}.mlp.w2.weight",
-                    "transpose",
-                ],
-                [
-                    f"h.{layer_index}.mlp.c_proj.weight",
-                    f"h.{layer_index}.mlp.c_proj.weight",
-                    "transpose",
-                ],
-            ]
-            mappings.extend(layer_mappings)
-
-        init_name_mappings(mappings)
-        for mapping in mappings:
-            mapping[0] = "transformer." + mapping[0]
-            if len(mapping) > 1 and mapping[1] is not None:
-                mapping[1] = "qwen." + mapping[1]
-
-        if config.architectures is not None:
-            if "QWenForCausalLM" in config.architectures or "QWenLMHeadModel" in config.architectures:
-                mappings.extend(
-                    [
-                        [
-                            "lm_head.weight",
-                            "lm_head.weight",
-                            "transpose",
-                        ]
-                    ]
-                )
-
-        init_name_mappings(mappings)
-        return [StateDictNameMapping(*mapping) for mapping in mappings]
-
 
 class QWenModelNet(QWenPretrainedModelNet):
     def __init__(self, config):
@@ -720,9 +609,6 @@ class QWenLMHeadNet(nn.Layer):
         return logits
 
 
-loss_cnt = 0
-
-
 class QWenPretrainingCriterionNet(paddle.nn.Layer):
     """
     Criterion for Llama.
@@ -739,7 +625,6 @@ class QWenPretrainingCriterionNet(paddle.nn.Layer):
         self.loss_func = paddle.nn.CrossEntropyLoss(reduction="none", ignore_index=self.ignore_index)
 
     def forward(self, prediction_scores, masked_lm_labels):
-        global loss_cnt
         if self.enable_parallel_cross_entropy:
             if prediction_scores.shape[-1] == self.config.vocab_size:
                 warnings.warn(
@@ -753,7 +638,6 @@ class QWenPretrainingCriterionNet(paddle.nn.Layer):
             masked_lm_loss = paddle.masked_select(masked_lm_loss, masked_lm_loss > 0).astype("float32")
             loss = paddle.mean(masked_lm_loss)
 
-        loss_cnt += 1
         return loss
 
 

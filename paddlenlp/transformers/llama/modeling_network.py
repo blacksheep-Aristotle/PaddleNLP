@@ -18,7 +18,6 @@ from __future__ import annotations
 import math
 import os
 import warnings
-from functools import partial
 from typing import Optional, Tuple
 
 import paddle
@@ -44,10 +43,6 @@ except ImportError:
 
 import paddle.distributed as dist
 
-from paddlenlp.transformers.conversion_utils import (
-    StateDictNameMapping,
-    init_name_mappings,
-)
 from paddlenlp.transformers.model_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     CausalLMOutputWithCrossAttentions,
@@ -681,128 +676,6 @@ class LlamaPretrainedModelNet(PretrainedModel):
     pretrained_init_configuration = LLAMA_PRETRAINED_INIT_CONFIGURATION
     pretrained_resource_files_map = LLAMA_PRETRAINED_RESOURCE_FILES_MAP
     _keys_to_ignore_on_load_unexpected = [r"self_attn.rotary_emb.inv_freq"]
-
-    @classmethod
-    def _get_name_mappings(cls, config: LlamaConfig) -> list[StateDictNameMapping]:
-        mappings: list[StateDictNameMapping] = []
-        model_mappings = [
-            ["embed_tokens.weight"],
-            ["norm.weight"],
-        ]
-        for layer_index in range(config.num_hidden_layers):
-            layer_mappings = [
-                [f"layers.{layer_index}.self_attn.q_proj.weight", None, "transpose"],
-                [f"layers.{layer_index}.self_attn.k_proj.weight", None, "transpose"],
-                [f"layers.{layer_index}.self_attn.v_proj.weight", None, "transpose"],
-                [f"layers.{layer_index}.self_attn.o_proj.weight", None, "transpose"],
-                [f"layers.{layer_index}.self_attn.rotary_emb.inv_freq"],
-                [f"layers.{layer_index}.mlp.gate_proj.weight", None, "transpose"],
-                [f"layers.{layer_index}.mlp.down_proj.weight", None, "transpose"],
-                [f"layers.{layer_index}.mlp.up_proj.weight", None, "transpose"],
-                [f"layers.{layer_index}.input_layernorm.weight"],
-                [f"layers.{layer_index}.post_attention_layernorm.weight"],
-            ]
-            model_mappings.extend(layer_mappings)
-
-        init_name_mappings(mappings=model_mappings)
-        # base-model prefix "LlamaModelNet"
-        if "LlamaModelNet" not in config.architectures:
-            for mapping in model_mappings:
-                mapping[0] = "model." + mapping[0]
-                mapping[1] = "llama." + mapping[1]
-            model_mappings.append(["lm_head.weight", "lm_head.weight", "transpose"])
-
-        mappings = [StateDictNameMapping(*mapping, index=index) for index, mapping in enumerate(model_mappings)]
-        return mappings
-
-    @classmethod
-    def _get_tensor_parallel_mappings(cls, config: LlamaConfig, is_split=True):
-
-        from paddlenlp.transformers.conversion_utils import split_or_merge_func
-
-        fn = split_or_merge_func(
-            is_split=is_split,
-            tensor_parallel_degree=config.tensor_parallel_degree,
-            tensor_parallel_rank=config.tensor_parallel_rank,
-            num_attention_heads=config.num_attention_heads,
-        )
-
-        def get_tensor_parallel_split_mappings(num_layers):
-            final_actions = {}
-
-            base_actions = {
-                "lm_head.weight": partial(fn, is_column=True),
-                # Row Linear
-                "embed_tokens.weight": partial(fn, is_column=False),
-                "layers.0.self_attn.o_proj.weight": partial(fn, is_column=False),
-                "layers.0.mlp.down_proj.weight": partial(fn, is_column=False),
-            }
-
-            # Column Linear
-            if config.fuse_attention_qkv and not enable_fuse_ffn_qkv_pass():
-                base_actions["layers.0.self_attn.qkv_proj.weight"] = partial(fn, is_column=True)
-            else:
-                base_actions["layers.0.self_attn.q_proj.weight"] = partial(fn, is_column=True)
-                # if we have enough num_key_value_heads to split, then split it.
-                if config.num_key_value_heads % config.tensor_parallel_degree == 0:
-                    base_actions["layers.0.self_attn.k_proj.weight"] = partial(fn, is_column=True)
-                    base_actions["layers.0.self_attn.v_proj.weight"] = partial(fn, is_column=True)
-
-            if config.fuse_attention_ffn and not enable_fuse_ffn_qkv_pass():
-                base_actions["layers.0.mlp.gate_up_fused_proj.weight"] = partial(
-                    fn, is_column=True, is_naive_2fuse=True
-                )
-            else:
-                base_actions["layers.0.mlp.gate_proj.weight"] = partial(fn, is_column=True)
-                base_actions["layers.0.mlp.up_proj.weight"] = partial(fn, is_column=True)
-
-            for key, action in base_actions.items():
-                if "layers.0." in key:
-                    for i in range(num_layers):
-                        final_actions[key.replace("layers.0.", f"layers.{i}.")] = action
-                final_actions[key] = action
-
-            return final_actions
-
-        mappings = get_tensor_parallel_split_mappings(config.num_hidden_layers)
-
-        return mappings
-
-    '''
-    def _init_weights(self, layer):
-        """Initialization hook"""
-        if isinstance(
-            layer,
-            (
-                nn.Linear,
-                nn.Embedding,
-                LlamaLMHeadNet,
-            ),
-        ):
-            # In the dygraph mode, use the `set_value` to reset the parameter directly,
-            # and reset the `state_dict` to update parameter in static mode.
-
-            if isinstance(layer.weight, paddle.Tensor):
-                layer.weight.set_value(
-                    paddle.tensor.normal(
-                        mean=0.0,
-                        std=self.config.initializer_range
-                        if hasattr(self.config, "initializer_range")
-                        else self.llama.config.initializer_range,
-                        shape=layer.weight.shape,
-                    )
-                )
-        # Layer.apply is DFS https://github.com/PaddlePaddle/Paddle/blob/a6f5021fcc58b21f4414bae6bf4731ef6971582c/python/paddle/nn/layer/layers.py#L527-L530
-        # sublayer is init first
-        # scale RowParallelLinear weight
-        with paddle.no_grad():
-            if isinstance(layer, LlamaMLPNet):
-                factor = 1 / math.sqrt(2 * self.config.num_hidden_layers)
-                layer.down_proj.weight.scale_(factor)
-            if isinstance(layer, LlamaAttentionNet):
-                factor = 1 / math.sqrt(2 * self.config.num_hidden_layers)
-                layer.o_proj.weight.scale_(factor)
-    '''
 
 
 @register_base_model
