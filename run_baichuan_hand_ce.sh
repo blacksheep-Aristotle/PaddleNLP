@@ -12,14 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-unset PADDLE_ELASTIC_JOB_ID
-unset PADDLE_TRAINER_ENDPOINTS
-unset DISTRIBUTED_TRAINER_ENDPOINTS
-unset FLAGS_START_PORT
-unset PADDLE_ELASTIC_TIMEOUT
-unset CUDA_VISIBLE_DEVICES
-export NNODES=1
-export PADDLE_TRAINERS_NUM=1
+# unset PADDLE_ELASTIC_JOB_ID
+# unset PADDLE_TRAINER_ENDPOINTS
+# unset DISTRIBUTED_TRAINER_ENDPOINTS
+# unset FLAGS_START_PORT
+# unset PADDLE_ELASTIC_TIMEOUT
+# unset CUDA_VISIBLE_DEVICES
+# export NNODES=1
+# export PADDLE_TRAINERS_NUM=1
 export GLOG_v=0
 export FLAGS_set_to_1d=0;
 # export CUDA_MODULE_LOADING=LAZY
