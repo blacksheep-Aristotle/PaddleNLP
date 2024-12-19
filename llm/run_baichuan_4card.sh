@@ -44,10 +44,10 @@ export PYTHONPATH=../../../:$PYTHONPATH
 python -u  -m paddle.distributed.launch \
     --gpus "0,1,2,3,4,5,6,7" \
     --log_dir  "log/$task_name""_log" \
-    ../../run_pretrain.py \
+    run_pretrain.py \
     --model_name_or_path "baichuan-inc/Baichuan2-13B-Base" \
     --tokenizer_name_or_path "baichuan-inc/Baichuan2-13B-Base" \
-    --input_dir "../data" \
+    --input_dir "auto_parallel/llama_data" \
     --output_dir "./output" \
     --split 949,50,1 \
     --to_static false \
