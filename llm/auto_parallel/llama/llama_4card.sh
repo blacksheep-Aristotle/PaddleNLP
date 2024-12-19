@@ -42,16 +42,16 @@ export FLAGS_enable_pir_api=1
 
 # unset PADDLE_WORKERS_IP_PORT_LIST
 
-export NNODES=1
-export PADDLE_TRAINERS_NUM=1
-export FLAGS_log_memory_stats=1
-export GLOG_v=1
+# export NNODES=1
+# export PADDLE_TRAINERS_NUM=1
+export FLAGS_log_memory_stats=0
+export GLOG_v=0
 # export CUDA_MODULE_LOADING=LAZY
 # export CUDA_DEVICE_MAX_CONNECTIONS=1
 WORLD_SIZE=32
-GBS=32
+GBS=128
 MBS=1
-MP=2
+MP=4
 SP=1  # 0 or 1
 PP=8
 VPP=5

@@ -56,7 +56,7 @@ python -u  -m paddle.distributed.launch \
     --pipeline_parallel_degree 2 \
     --tensor_parallel_degree 4 \
     --virtual_pp_degree 2\
-    --pipeline_schedule_mode "VPP" \
+    --pipeline_schedule_mode "1F1B" \
     --weight_decay 0.01 \
     --warmup_ratio 0.01 \
     --max_grad_norm 0.0 \
@@ -90,7 +90,7 @@ python -u  -m paddle.distributed.launch \
     --fuse_attention_qkv true \
     --use_flash_attention true \
     --use_fused_rope true \
-    --use_fused_rms_norm false \
+    --use_fused_rms_norm true \
     --max_seq_length 4096 \
     --sequence_parallel false \
     --sharding "stage1" \
