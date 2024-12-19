@@ -53,7 +53,7 @@ python -u  -m paddle.distributed.launch \
     run_pretrain_3D_auto.py \
     --model_name_or_path "qwen/qwen-14b" \
     --tokenizer_name_or_path "qwen/qwen-14b" \
-    --input_dir "../data" \
+    --input_dir "../llama_data" \
     --output_dir "./checkpoints/qwen_pretrain_ckpts" \
     --per_device_train_batch_size 1\
     --gradient_accumulation_steps 32\
