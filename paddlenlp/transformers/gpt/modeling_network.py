@@ -28,10 +28,6 @@ import paddle.nn as nn
 import paddle.nn.functional as F
 import paddle.tensor as tensor
 from paddle.distributed import fleet
-from paddle.distributed.auto_parallel.intermediate.tensor_parallel import (
-    ColWiseParallel,
-    RowWiseParallel,
-)
 from paddle.distributed.fleet.meta_parallel import get_rng_state_tracker
 from paddle.distributed.fleet.utils import recompute
 from paddle.utils import try_import
@@ -1129,7 +1125,7 @@ class GPTLMHeadNet(nn.Layer):
                 shape=[config.vocab_size, config.hidden_size],
                 dtype=paddle.get_default_dtype(),
             )
-            
+
     def forward(self, hidden_states, tensor_parallel_output=None):
 
         if self.config.sequence_parallel:
