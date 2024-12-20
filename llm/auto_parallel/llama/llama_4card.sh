@@ -46,7 +46,7 @@ export FLAGS_enable_pir_api=1
 # export PADDLE_TRAINERS_NUM=1
 export FLAGS_log_memory_stats=0
 export GLOG_v=0
-# export CUDA_MODULE_LOADING=LAZY
+export CUDA_MODULE_LOADING=LAZY
 # export CUDA_DEVICE_MAX_CONNECTIONS=1
 WORLD_SIZE=32
 GBS=128
@@ -54,7 +54,7 @@ MBS=1
 MP=4
 SP=1  # 0 or 1
 PP=8
-VPP=5
+VPP=10
 SD=$(($WORLD_SIZE / ($MP * $PP)))
 ACC_STEPS=$(($GBS / ($SD * $MBS)))
 
@@ -114,8 +114,10 @@ python -u  -m paddle.distributed.launch \
     --fuse_attention_qkv true \
     --use_flash_attention true \
     --fused_linear_param_grad_add true \
+    --fused_linear true \
+    --eliminate_transpose true \
     --use_fused_rope true \
-    --use_fused_rms_norm false \
+    --use_fused_rms_norm true \
     --max_seq_length 4096 \
     --sequence_parallel ${SP} \
     --sharding "stage1" \
