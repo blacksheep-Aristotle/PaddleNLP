@@ -115,6 +115,7 @@ python -u  -m paddle.distributed.launch \
     --use_flash_attention true \
     --fused_linear_param_grad_add true \
     --fused_linear true \
+    --fuse_allreduce_split_to_reducescatter true\
     --eliminate_transpose true \
     --use_fused_rope true \
     --use_fused_rms_norm true \
@@ -125,6 +126,7 @@ python -u  -m paddle.distributed.launch \
     --sharding_parallel_config "enable_stage1_overlap" \
     --tensor_parallel_config "enable_mp_async_allreduce replace_with_parallel_cross_entropy" \
     --pipeline_parallel_config "enable_send_recv_overlap enable_split_backward" \
+    --sequence_parallel_config "enable_allreduce_avg_in_gradinent_scale" \
     --auto_parallel_resume_form_hybrid_parallel true \
     # --master=10.54.84.211:9090 \
     # --nnodes 4 \
