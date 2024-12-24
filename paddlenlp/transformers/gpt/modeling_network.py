@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import collections
 import contextlib
-import math
 
 import numpy as np
 import paddle
@@ -157,7 +156,7 @@ class MultiHeadAttentionNet(nn.Layer):
 
     Cache = collections.namedtuple("Cache", ["k", "v"])
 
-    def __init__(self, config, ipp=None):
+    def __init__(self, config):
         super(MultiHeadAttentionNet, self).__init__()
 
         self.config = config
@@ -480,7 +479,7 @@ class GPTDecoderLayerNet(nn.Layer):
     It contains multiheadattention and some linear layers.
     """
 
-    def __init__(self, config: GPTConfig, ipp=None):
+    def __init__(self, config: GPTConfig):
         super(GPTDecoderLayerNet, self).__init__()
         self.config = config
 
@@ -490,7 +489,7 @@ class GPTDecoderLayerNet(nn.Layer):
         if not FusedDropoutAdd:
             config.use_fused_dropout_add = False
 
-        self.self_attn = MultiHeadAttentionNet(config, ipp)
+        self.self_attn = MultiHeadAttentionNet(config)
 
         self.linear1 = nn.Linear(config.hidden_size, config.intermediate_size, bias_attr=True)
         self.linear2 = nn.Linear(config.intermediate_size, config.hidden_size, bias_attr=True)
@@ -761,18 +760,6 @@ class GPTModelNet(GPTPretrainedModelNet):
 
         self.global_layer = GlobalNet(config)
 
-    def get_layer_ipp(self, layer_index):
-        mesh = fleet.auto.get_mesh()
-        if "pp" not in mesh.dim_names:
-            return None
-        else:
-            pp_degree = mesh.get_dim_size("pp")
-            layer_per_stage = math.ceil(self.config.num_hidden_layers / pp_degree)
-            return layer_index // layer_per_stage
-
-    def get_last_layer_ipp(self):
-        return self.get_layer_ipp(self.config.num_hidden_layers - 1)
-
     def get_input_embeddings(self):
         return self.embeddings.word_embeddings
 
@@ -987,7 +974,7 @@ class GPTPretrainingCriterionNet(paddle.nn.Layer):
 
 
 class GPTLMHeadNet(nn.Layer):
-    def __init__(self, config: GPTConfig, embedding_weights=None, ipp=None):
+    def __init__(self, config: GPTConfig, embedding_weights=None):
         super(GPTLMHeadNet, self).__init__()
         self.config = config
         self.transpose_y = True

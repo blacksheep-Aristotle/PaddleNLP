@@ -217,7 +217,7 @@ class LlamaRMSNormNet(nn.Layer):
 
 
 class LlamaMLPNet(nn.Layer):
-    def __init__(self, config, ipp: Optional[int] = None):
+    def __init__(self, config):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
@@ -245,7 +245,7 @@ class LlamaMLPNet(nn.Layer):
 class LlamaAttentionNet(nn.Layer):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: LlamaConfig, layerwise_recompute: bool = False, ipp: Optional[int] = None):
+    def __init__(self, config: LlamaConfig, layerwise_recompute: bool = False):
         super().__init__()
 
         self.config = config
@@ -502,12 +502,12 @@ class LlamaAttentionNet(nn.Layer):
 
 
 class LlamaDecoderLayerNet(nn.Layer):
-    def __init__(self, config, layerwise_recompute: bool = False, ipp: Optional[int] = None):
+    def __init__(self, config, layerwise_recompute: bool = False):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
-        self.self_attn = LlamaAttentionNet(config, layerwise_recompute, ipp)
-        self.mlp = LlamaMLPNet(config, ipp)
+        self.self_attn = LlamaAttentionNet(config, layerwise_recompute)
+        self.mlp = LlamaMLPNet(config)
         self.input_layernorm = LlamaRMSNormNet(config)
         self.post_attention_layernorm = LlamaRMSNormNet(config)
         # Note that we will actually perform a recompute only if both enable_recompute and layerwise_recompute are set to True

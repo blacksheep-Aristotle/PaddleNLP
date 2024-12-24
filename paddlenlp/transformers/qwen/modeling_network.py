@@ -110,7 +110,7 @@ attention_cnt = 0
 
 
 class QWenAttentionNet(nn.Layer):
-    def __init__(self, config, ipp=None):
+    def __init__(self, config):
         super().__init__()
 
         self.config = config
@@ -314,7 +314,7 @@ class QWenAttentionNet(nn.Layer):
 
 
 class QWenMLPNet(nn.Layer):
-    def __init__(self, config, ipp=None):
+    def __init__(self, config):
         super().__init__()
         ff_dim_in = config.intermediate_size // 2
         self.fuse_attention_ffn = config.fuse_attention_ffn
@@ -338,13 +338,13 @@ class QWenMLPNet(nn.Layer):
 
 
 class QWenBlockNet(nn.Layer):
-    def __init__(self, config, ipp=None, idx=None):
+    def __init__(self, config, idx=None):
         super().__init__()
         self.config = config
         self.ln_1 = QWenRMSNormNet(config)
-        self.attn = QWenAttentionNet(config, ipp)
+        self.attn = QWenAttentionNet(config)
         self.ln_2 = QWenRMSNormNet(config)
-        self.mlp = QWenMLPNet(config, ipp)
+        self.mlp = QWenMLPNet(config)
         self.idx = idx
 
     def forward(
@@ -415,25 +415,12 @@ class QWenModelNet(QWenPretrainedModelNet):
             [
                 QWenBlockNet(
                     config,
-                    self.get_layer_ipp(i),
                     i,
                 )
                 for i in range(config.num_hidden_layers)
             ]
         )
         self.ln_f = QWenRMSNormNet(config)
-
-    def get_layer_ipp(self, layer_index):
-        mesh = fleet.auto.get_mesh()
-        if "pp" not in mesh.dim_names:
-            return None
-        else:
-            pp_degree = mesh.get_dim_size("pp")
-            layer_per_stage = math.ceil(self.config.num_hidden_layers / pp_degree)
-            return layer_index // layer_per_stage
-
-    def get_last_layer_ipp(self):
-        return self.get_layer_ipp(self.config.num_hidden_layers - 1)
 
     def get_input_embeddings(self):
         return self.wte
@@ -592,7 +579,7 @@ class QWenModelNet(QWenPretrainedModelNet):
 
 
 class QWenLMHeadNet(nn.Layer):
-    def __init__(self, config: QWenConfig, ipp=None):
+    def __init__(self, config: QWenConfig):
         super(QWenLMHeadNet, self).__init__()
         self.config = config
         vocab_size = config.vocab_size
