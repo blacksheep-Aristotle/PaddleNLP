@@ -23,7 +23,6 @@ from typing import Optional, Tuple
 import paddle
 import paddle.nn.functional as F
 from paddle import nn
-from paddle.distributed import fleet
 from paddle.distributed.fleet.utils import recompute
 
 try:
@@ -88,26 +87,6 @@ def enable_fuse_ffn_qkv_pass():
         return True
     else:
         return False
-
-
-def is_pp_enable():
-    mesh = fleet.auto.get_mesh()
-    return "pp" in mesh.dim_names
-
-
-def get_mesh(pp_idx=0):
-    mesh = fleet.auto.get_mesh()
-    if "pp" in mesh.dim_names:
-        mesh = mesh.get_mesh_with_dim("pp", pp_idx)
-    return mesh
-
-
-def global_mesh_starts_with_pp():
-    mesh = fleet.auto.get_mesh()
-    if is_pp_enable():
-        return mesh.get_mesh_with_dim("pp")
-    else:
-        return mesh
 
 
 def scaled_dot_product_attention(
@@ -700,23 +679,9 @@ class LlamaModelNet(LlamaPretrainedModelNet):
         )
         self.global_layer = GlobalOutputNet(config=config)
 
-        def get_layer_pp_info(layer_index):
-            mesh = fleet.auto.get_mesh()
-            if is_pp_enable() is False:
-                return None, False
-            else:
-                pp_degree = mesh.get_dim_size("pp")
-                layer_per_stage = math.ceil(config.num_hidden_layers / pp_degree)
-                input_need_reshard = layer_index % layer_per_stage == 0
-                return layer_index // layer_per_stage, input_need_reshard
-
         decoder_layers = []
-        self.next_pp_stage_indexes = []
         for i in range(config.num_hidden_layers):
-            pp_stage_id, input_need_reshard = get_layer_pp_info(i)
-            decoder_layers.append(LlamaDecoderLayerNet(config, i not in self.no_recompute_layers, pp_stage_id))
-            if input_need_reshard:
-                self.next_pp_stage_indexes.append(i)
+            decoder_layers.append(LlamaDecoderLayerNet(config, i not in self.no_recompute_layers))
 
         self.layers = nn.LayerList(decoder_layers)
         self.norm = LlamaRMSNormNet(config)

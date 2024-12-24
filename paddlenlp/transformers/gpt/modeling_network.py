@@ -25,7 +25,6 @@ import paddle.incubate as incubate
 import paddle.nn as nn
 import paddle.nn.functional as F
 import paddle.tensor as tensor
-from paddle.distributed import fleet
 from paddle.distributed.fleet.meta_parallel import get_rng_state_tracker
 from paddle.distributed.fleet.utils import recompute
 from paddle.utils import try_import
@@ -63,13 +62,6 @@ __all__ = [
     "GPTDecoderLayerNet",
     "GPTLayerNorm",
 ]
-
-
-def get_mesh(pp_idx=0):
-    mesh = fleet.auto.get_mesh()
-    if "pp" in mesh.dim_names:
-        mesh = mesh.get_mesh_with_dim("pp")[pp_idx]
-    return mesh
 
 
 def get_triangle_upper_mask(x, mask=None):
@@ -618,9 +610,6 @@ class GPTEmbeddingsNet(nn.Layer):
         self.position_embeddings = nn.Embedding(
             config.max_position_embeddings,
             config.hidden_size,
-        )
-        self.word_embeddings.weight = dist.shard_tensor(
-            self.word_embeddings.weight, get_mesh(), [dist.Replicate(), dist.Replicate()]
         )
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 

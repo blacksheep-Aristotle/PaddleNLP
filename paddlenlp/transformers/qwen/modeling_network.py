@@ -18,8 +18,7 @@ import warnings
 import paddle
 import paddle.distributed as dist
 import paddle.nn.functional as F
-from paddle import Tensor, nn
-from paddle.distributed import fleet
+from paddle import nn
 from paddle.distributed.fleet.utils import recompute
 from paddle.utils import try_import
 
@@ -59,38 +58,6 @@ except ImportError:
         if y is None:
             x, y = paddle.chunk(x, chunks=2, axis=-1)
         return F.silu(x) * y
-
-
-def get_mesh(pp_idx=0):
-    mesh = fleet.auto.get_mesh()
-    if "pp" in mesh.dim_names:
-        mesh = mesh.get_mesh_with_dim("pp")[pp_idx]
-    return mesh
-
-
-def parallel_matmul(x: Tensor, y: Tensor, tensor_parallel_output=True):
-    is_fleet_init = True
-    tensor_parallel_degree = 1
-    try:
-        hcg = fleet.get_hybrid_communicate_group()
-        model_parallel_group = hcg.get_model_parallel_group()
-        tensor_parallel_degree = hcg.get_model_parallel_world_size()
-    except:
-        is_fleet_init = False
-
-    if is_fleet_init and tensor_parallel_degree > 1 and y.is_distributed:
-        # if not running under distributed.launch, it will raise AttributeError: 'Fleet' object has no attribute '_hcg'
-        input_parallel = paddle.distributed.collective._c_identity(x, group=model_parallel_group)
-        logits = paddle.matmul(input_parallel, y, transpose_y=False)
-
-        if tensor_parallel_output:
-            return logits
-
-        return paddle.distributed.collective._c_concat(logits, group=model_parallel_group)
-
-    else:
-        logits = paddle.matmul(x, y, transpose_y=False)
-        return logits
 
 
 def get_triangle_upper_mask(x, mask=None):
