@@ -25,7 +25,7 @@
 export NCCL_DEBUG=INFO
 
 export FLAGS_benchmark=false
-
+export FLAGS_enable_p2p_comm_opt=1
 export GLOG_v=0
 export FLAGS_print_ir=0
 #this optional is for compare train precison

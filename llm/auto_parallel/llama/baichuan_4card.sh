@@ -27,7 +27,7 @@ set -x
 # export PADDLE_TRAINERS_NUM=1
 
 export GLOG_v=0
-
+export FLAGS_enable_p2p_comm_opt=1
 export FLAGS_cudnn_deterministic=0
 export FLAGS_embedding_deterministic=0
 export FLAGS_max_inplace_grad_add=65536

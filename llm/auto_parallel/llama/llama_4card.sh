@@ -47,6 +47,7 @@ export FLAGS_enable_pir_api=1
 export FLAGS_log_memory_stats=0
 export GLOG_v=0
 export CUDA_MODULE_LOADING=LAZY
+export FLAGS_enable_p2p_comm_opt=1
 # export CUDA_DEVICE_MAX_CONNECTIONS=1
 WORLD_SIZE=32
 GBS=128
