@@ -22,7 +22,7 @@
 # export NNODES=1
 # export PADDLE_TRAINERS_NUM=1
 
-export NCCL_DEBUG=INFO
+# export NCCL_DEBUG=INFO
 
 export FLAGS_benchmark=false
 export FLAGS_enable_p2p_comm_opt=1
@@ -77,7 +77,7 @@ python -u -m paddle.distributed.launch \
     --device "gpu" \
     --model_type "gpt" \
     --sharding "stage1" \
-    --tensor_parallel_degree 2 \
+    --tensor_parallel_degree 1 \
     --pipeline_parallel_degree 4 \
     --virtual_pp_degree 2 \
     --pipeline_schedule_mode "1F1B" \
