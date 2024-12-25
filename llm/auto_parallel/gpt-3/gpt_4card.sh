@@ -78,7 +78,7 @@ python -u -m paddle.distributed.launch \
     --model_type "gpt" \
     --sharding "stage1" \
     --tensor_parallel_degree 4 \
-    --pipeline_parallel_degree 1 \
+    --pipeline_parallel_degree 2 \
     --virtual_pp_degree 2 \
     --pipeline_schedule_mode "1F1B" \
     --virtual_pipeline_seg_method 'GPTDecoderLayerAuto' \
