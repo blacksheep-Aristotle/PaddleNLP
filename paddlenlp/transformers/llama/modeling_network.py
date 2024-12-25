@@ -73,8 +73,8 @@ except:
     flash_attention = None
 
 __all__ = [
-    "LlamaForCausalLM3DNet",
-    "LlamaPretrainingCriterion3DNet",
+    "LlamaForCausalLMNet",
+    "LlamaPretrainingCriterionNet",
 ]
 
 
@@ -841,7 +841,7 @@ class LlamaModelNet(LlamaPretrainedModelNet):
         )
 
 
-class LlamaPretrainingCriterion3DNet(paddle.nn.Layer):
+class LlamaPretrainingCriterionNet(paddle.nn.Layer):
     """
     Criterion for Llama.
     It calculates the final loss.
@@ -849,7 +849,7 @@ class LlamaPretrainingCriterion3DNet(paddle.nn.Layer):
 
     def __init__(self, config):
 
-        super(LlamaPretrainingCriterion3DNet, self).__init__()
+        super(LlamaPretrainingCriterionNet, self).__init__()
         self.ignore_index = getattr(config, "ignore_index", -100)
         self.config = config
         self.enable_parallel_cross_entropy = config.tensor_parallel_degree > 1 and config.tensor_parallel_output
@@ -899,7 +899,7 @@ class LlamaLMHeadNet(nn.Layer):
         return logits
 
 
-class LlamaForCausalLM3DNet(LlamaPretrainedModelNet):
+class LlamaForCausalLMNet(LlamaPretrainedModelNet):
     enable_to_static_method = True
     _tied_weights_keys = ["lm_head.weight"]
 

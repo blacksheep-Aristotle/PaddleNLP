@@ -40,7 +40,7 @@ from paddlenlp.transformers import (
     LinearAnnealingWithWarmupDecay,
     QWenConfig,
     QWenForCausalLM3DAuto,
-    QWenForCausalLM3DNet,
+    QWenForCausalLMNet,
     QWenPretrainingCriterionAuto,
     QWenPretrainingCriterionNet,
 )
@@ -48,7 +48,7 @@ from paddlenlp.utils.log import logger
 
 MODEL_CLASSES = {
     "qwen": (QWenConfig, QWenForCausalLM3DAuto, QWenPretrainingCriterionAuto),
-    "qwen_network": (QWenConfig, QWenForCausalLM3DNet, QWenPretrainingCriterionNet),
+    "qwen_network": (QWenConfig, QWenForCausalLMNet, QWenPretrainingCriterionNet),
 }
 
 from paddlenlp.data.causal_dataset import (

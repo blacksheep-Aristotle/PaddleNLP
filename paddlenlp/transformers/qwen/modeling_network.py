@@ -30,7 +30,7 @@ from .configuration import QWenConfig
 
 __all__ = [
     "QWenBlockNet",
-    "QWenForCausalLM3DNet",
+    "QWenForCausalLMNet",
     "QWenPretrainedModelNet",
     "QWenModelNet",
     "QWenLMHeadNet",
@@ -595,7 +595,7 @@ class QWenPretrainingCriterionNet(paddle.nn.Layer):
         return loss
 
 
-class QWenForCausalLM3DNet(QWenPretrainedModelNet):
+class QWenForCausalLMNet(QWenPretrainedModelNet):
     _keys_to_ignore_on_load_missing = [r"h\.\d+\.attn\.rotary_emb\.inv_freq"]
 
     def __init__(self, config):
