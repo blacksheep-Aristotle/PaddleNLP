@@ -28,15 +28,18 @@ from paddle.distributed.auto_parallel.intermediate.parallelize import (
 )
 from tqdm.auto import tqdm
 
-from paddlenlp.trainer import Trainer
-from paddlenlp.transformers.model_utils import PretrainedModel
+from paddlenlp.trl import SFTTrainer
 
-from ..utils.batch_sampler import DistributedBatchSampler as NlpDistributedBatchSampler
-from ..utils.log import logger
-from .argparser import strtobool
-from .trainer import SCALER_NAME, SCHEDULER_NAME, TRAINER_STATE_NAME, TRAINING_ARGS_NAME
-from .trainer_callback import TrainerState
-from .trainer_utils import (  # set_hyrbid_parallel_seed,
+from ..data import DataCollatorForSeq2Seq
+from ..trainer.argparser import strtobool
+from ..trainer.trainer import (
+    SCALER_NAME,
+    SCHEDULER_NAME,
+    TRAINER_STATE_NAME,
+    TRAINING_ARGS_NAME,
+)
+from ..trainer.trainer_callback import TrainerState
+from ..trainer.trainer_utils import (  # set_hyrbid_parallel_seed,
     PREFIX_CHECKPOINT_DIR,
     ShardingOption,
     TrainOutput,
@@ -80,10 +83,7 @@ class AutoTrainer(Trainer):
         if kwargs.get("args", None) is not None and kwargs["args"].use_intermediate_api:
             model = kwargs.get("model", None)
             assert model is not None
-            assert isinstance(model, PretrainedModel), f" AutoTrainer only support pretrained models,but got {model}"
-            for param in model.parameters():
-                assert not param._is_initialized(), "intermediate_api needs lazy init"
-
+            # NOTE(zhangwl): some param_init_func is not suuport lazy init
             auto_dist_degree = {
                 "tensor_parallel": kwargs["args"].tensor_parallel_degree > 1,
                 "sequence_parallel": sequence_parallel,
@@ -94,7 +94,6 @@ class AutoTrainer(Trainer):
             }
             auto_dist_config = model._generate_auto_dist_config(auto_dist_degree)
             self.auto_dist_config = auto_dist_config
-
             model = parallelize_model(
                 model,
                 config=self.auto_dist_config,
@@ -107,6 +106,19 @@ class AutoTrainer(Trainer):
             if not param._is_initialized():
                 param.initialize()
         kwargs["model"] = model
+
+        trainable_parameters = [p for p in model.parameters() if not p.stop_gradient]
+        self.set_optimizer_grouped_parameters(trainable_parameters)
+
+        assert kwargs["args"].max_seq_length is not None, "max_seq_length must be specified in auto_parallel"
+
+        if kwargs.get("data_collator", None) is None:
+            data_collator = DataCollatorForSeq2Seq(
+                max_length=kwargs["args"].max_seq_length,
+                max_label_length=kwargs["args"].max_seq_length,
+                padding="max_length",
+            )
+            kwargs["data_collator"] = data_collator
 
         super().__init__(*args, **kwargs)
         assert self.args.enable_auto_parallel
@@ -387,7 +399,10 @@ class AutoTrainer(Trainer):
 
         model, dist_loader = self._wrap_for_auto(model, train_dataloader)
         train_dataloader = dist_loader()
+<<<<<<< HEAD:paddlenlp/trainer/auto_trainer.py
 
+=======
+>>>>>>> [AutoParallel]:auto parallel support lora model:paddlenlp/trl/sft_auto_trainer.py
         if resume_from_checkpoint is not None:
             self._load_from_checkpoint(resume_from_checkpoint)
 
@@ -607,9 +622,11 @@ class AutoTrainer(Trainer):
         return loss
 
     def static_training(self, model: nn.Layer, inputs: Dict[str, Union[paddle.Tensor, Any]]) -> paddle.Tensor:
-        input_ids, labels = tuple(inputs.values())
+        # NOTE(zhangwl):need support input attention_mask in static mode
+        input_ids, labels, _ = list(inputs.values())
         loss = model(input_ids, labels)
-
+        # inputs = list(inputs.values())
+        # loss = model(*inputs)
         if loss is not None and self.args.gradient_accumulation_steps > 1 and not self._enable_delay_scale_loss():
             loss = loss / self.args.gradient_accumulation_steps
 
@@ -666,6 +683,7 @@ class AutoTrainer(Trainer):
 
     def _maybe_log_save_evaluate(self, tr_loss, model, epoch, ignore_keys_for_eval, **kwargs):
         with _exec_mode_guard("dynamic"):
+            self.control.should_evaluate = False
             super()._maybe_log_save_evaluate(tr_loss, model, epoch, ignore_keys_for_eval, **kwargs)
 
     def _save_model(self):
