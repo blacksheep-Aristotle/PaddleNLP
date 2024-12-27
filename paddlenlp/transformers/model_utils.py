@@ -2782,7 +2782,7 @@ class PretrainedModel(Layer, GenerationMixin, ConversionMixin):
                     for k, v in config["mp_config"]["parallelize_plan"].items():
                         assert (
                             k not in final_config["mp_config"]["parallelize_plan"].keys()
-                        ), f"sublayer mp_config shuld be a subset of model bug got sublayer config {config['mp_config']} and model config {final_config['mp_config']}."
+                        ), f"sublayer mp_config shuld be a subset of model but got sublayer config {config['mp_config']} and model config {final_config['mp_config']}."
                         final_config["mp_config"]["parallelize_plan"][k] = v
             if "sp_config" in config and config["sp_config"] is not None:
                 if final_config["sp_config"] is None:
@@ -2791,7 +2791,7 @@ class PretrainedModel(Layer, GenerationMixin, ConversionMixin):
                     for k, v in config["sp_config"]["parallelize_plan"].items():
                         assert (
                             k not in final_config["sp_config"]["parallelize_plan"].keys()
-                        ), f"sublayer mp_config shuld be a subset of model bug got sublayer config {config['sp_config']} and model config {final_config['sp_config']}."
+                        ), f"sublayer sp_config shuld be a subset of model but got sublayer config {config['sp_config']} and model config {final_config['sp_config']}."
                         final_config["sp_config"]["parallelize_plan"][k] = v
             if "pp_config" in config and config["pp_config"] is not None:
                 if isinstance(config["pp_config"]["split_spec"], str):
