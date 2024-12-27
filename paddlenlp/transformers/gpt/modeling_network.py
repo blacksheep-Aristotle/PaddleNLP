@@ -37,10 +37,7 @@ except:
     pass
 
 from .. import PretrainedModel, register_base_model
-from ..model_outputs import (
-    BaseModelOutputWithPastAndCrossAttentions,
-    CausalLMOutputWithCrossAttentions,
-)
+from ..model_outputs import BaseModelOutputWithPastAndCrossAttentions
 from .configuration import GPT_PRETRAINED_INIT_CONFIGURATION, GPTConfig
 
 try:
@@ -1082,23 +1079,8 @@ class GPTForCausalLMNet(GPTPretrainedModelNet):
         else:
             hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
-        loss = None
-        if labels is not None:
-            loss = self.criterion(logits, labels)
 
-        if not return_dict:
-            if isinstance(outputs, input_type):
-                return (loss, logits) if loss is not None else logits
-            outputs = (logits,) + outputs[1:]
-            return ((loss,) + outputs) if loss is not None else outputs
-        return CausalLMOutputWithCrossAttentions(
-            loss=loss,
-            logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-            cross_attentions=outputs.cross_attentions,
-        )
+        return logits
 
     def prepare_fast_entry(self, kwargs):
         from paddlenlp.ops import FasterGPT

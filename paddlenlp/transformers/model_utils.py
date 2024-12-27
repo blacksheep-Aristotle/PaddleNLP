@@ -2745,6 +2745,26 @@ class PretrainedModel(Layer, GenerationMixin, ConversionMixin):
     def merge_auto_dist_configs(self, configs):
         """
         Merged all auto dist configs into one config.
+        configs is a list of config,every config is a dict,which means a model auto_dist_config.
+        [
+            {
+                mp_config (dict): {
+                    "parallelize_plan": dict, the plan to shard the layer.
+                }
+                pp_config (dict): {
+                    "split_spec": OrderedDict|dict|str|list(str), The pipeline parallel split point.
+                    "global_spec": str|list(str), make the output tensor of specific layers on global mesh.
+                }
+            },{
+                mp_config (dict): {
+                    "parallelize_plan": dict, the plan to shard the layer.
+                }
+                pp_config (dict): {
+                    "split_spec": OrderedDict|dict|str|list(str), The pipeline parallel split point.
+                    "global_spec": str|list(str), make the output tensor of specific layers on global mesh.
+                }
+            },....
+        ]
         """
         assert isinstance(configs, (dict, list))
         if isinstance(configs, dict):
@@ -2760,14 +2780,18 @@ class PretrainedModel(Layer, GenerationMixin, ConversionMixin):
                     final_config["mp_config"] = config["mp_config"]
                 else:
                     for k, v in config["mp_config"]["parallelize_plan"].items():
-                        assert k not in final_config["mp_config"]["parallelize_plan"].keys()
+                        assert (
+                            k not in final_config["mp_config"]["parallelize_plan"].keys()
+                        ), f"sublayer mp_config shuld be a subset of model bug got sublayer config {config['mp_config']} and model config {final_config['mp_config']}."
                         final_config["mp_config"]["parallelize_plan"][k] = v
             if "sp_config" in config and config["sp_config"] is not None:
                 if final_config["sp_config"] is None:
                     final_config["sp_config"] = config["sp_config"]
                 else:
                     for k, v in config["sp_config"]["parallelize_plan"].items():
-                        assert k not in final_config["sp_config"]["parallelize_plan"].keys()
+                        assert (
+                            k not in final_config["sp_config"]["parallelize_plan"].keys()
+                        ), f"sublayer mp_config shuld be a subset of model bug got sublayer config {config['sp_config']} and model config {final_config['sp_config']}."
                         final_config["sp_config"]["parallelize_plan"][k] = v
             if "pp_config" in config and config["pp_config"] is not None:
                 if isinstance(config["pp_config"]["split_spec"], str):

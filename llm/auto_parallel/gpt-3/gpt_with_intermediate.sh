@@ -44,7 +44,7 @@ to_static=1
 # export PYTHONPATH=../../../:$PYTHONPATH
 
 python -u -m paddle.distributed.launch \
-    --gpus "4,5,6,7" \
+    --gpus "0,1,2,3" \
     --log_dir ${log_dir} \
     run_pretrain_auto.py \
     --model_name_or_path gpt3-13B-en \

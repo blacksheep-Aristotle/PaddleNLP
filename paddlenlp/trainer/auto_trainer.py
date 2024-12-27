@@ -80,7 +80,7 @@ class AutoTrainer(Trainer):
         if kwargs.get("args", None) is not None and kwargs["args"].use_intermediate_api:
             model = kwargs.get("model", None)
             assert model is not None
-            assert isinstance(model, PretrainedModel)
+            assert isinstance(model, PretrainedModel), f" AutoTrainer only support pretrained models,but got {model}"
             for param in model.parameters():
                 assert not param._is_initialized(), "intermediate_api needs lazy init"
 

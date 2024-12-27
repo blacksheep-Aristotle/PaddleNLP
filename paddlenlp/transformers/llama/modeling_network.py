@@ -1026,23 +1026,6 @@ class LlamaForCausalLMNet(LlamaPretrainedModelNet):
 
         return logits
 
-        # loss = None
-        # if labels is not None:
-        #     labels.stop_gradient = True
-        #     loss = self.criterion(logits, labels)
-
-        # if not return_dict:
-        #     output = (logits,) + outputs[1:]
-        #     return (loss,) + output if loss is not None else output
-
-        # return CausalLMOutputWithCrossAttentions(
-        #     loss=loss,
-        #     logits=logits,
-        #     past_key_values=outputs.past_key_values,
-        #     hidden_states=outputs.hidden_states,
-        #     attentions=outputs.attentions,
-        # )
-
     def auto_dist_config(self, prefix=""):
         if prefix != "":
             assert prefix.endswith(".")
