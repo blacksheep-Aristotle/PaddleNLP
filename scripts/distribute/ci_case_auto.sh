@@ -766,7 +766,7 @@ function llama_align_dygraph_dy2st_pir_auto_bs2_bf16_DP2-MP2-PP1-SP() {
                 python -u -m paddle.distributed.launch \
                     --gpus "0,1,2,3" \
                     --log_dir $case_log_dir \
-                    run_pretrain_auto.py \
+                    ../run_pretrain_auto.py \
                     --model_type "llama" \
                     --model_name_or_path "facebook/llama-7b" \
                     --tokenizer_name_or_path "facebook/llama-7b" \
