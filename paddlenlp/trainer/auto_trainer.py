@@ -84,7 +84,6 @@ class AutoTrainer(Trainer):
     def parallel_model(cls, model, training_args: AutoTrainingArguments):
         if not training_args.use_intermediate_api:
             return model, None
-        sequence_parallel = False
         sequence_parallel = training_args.sequence_parallel
         assert model is not None
         for param in model.parameters():
