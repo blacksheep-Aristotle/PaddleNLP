@@ -225,10 +225,6 @@ class ModelArguments:
             "help": "Pre-training from existing paddlenlp model weights. Default False and model will train from scratch. If set True, the model_name_or_path argument must exist in the paddlenlp models."
         },
     )
-    sequence_parallel: bool = field(
-        default=False,
-        metadata={"help": "whether to use sequence parallel"},
-    )
     fuse_sequence_parallel_allreduce: bool = field(
         default=False,
         metadata={"help": "whether to use fuse sequence parallel allreduce"},
