@@ -593,6 +593,12 @@ def main():
         need_data=training_args.should_load_dataset,
     )
 
+    model, auto_dist_config = PretrainingTrainer.parallel_model(
+        model, training_args=training_args, model_args=model_args
+    )
+    for param in model.parameters():
+        if not param._is_initialized():
+            param.initialize()
     trainer = PretrainingTrainer(
         model=model,
         criterion=criterion,
@@ -602,6 +608,7 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         optimizers=(None, lr_scheduler),
         tokenizer=tokenizer,
+        auto_dist_config=auto_dist_config,
     )
 
     checkpoint = None

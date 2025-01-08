@@ -29,7 +29,6 @@ from paddle.distributed.auto_parallel.intermediate.parallelize import (
 from tqdm.auto import tqdm
 
 from paddlenlp.trainer import Trainer
-from paddlenlp.transformers.model_utils import PretrainedModel
 
 from ..utils.batch_sampler import DistributedBatchSampler as NlpDistributedBatchSampler
 from ..utils.log import logger
@@ -71,50 +70,7 @@ class AutoTrainer(Trainer):
 
                 kwargs.update({"criterion": loss_func})
 
-        sequence_parallel = False
-        if kwargs.get("model_args", None) is not None:
-            model_args = kwargs.pop("model_args")
-            if hasattr(model_args, "sequence_parallel"):
-                sequence_parallel = model_args.sequence_parallel
-
-        if kwargs.get("args", None) is not None and kwargs["args"].use_intermediate_api:
-            model = kwargs.get("model", None)
-            assert model is not None
-            assert isinstance(model, PretrainedModel), f" AutoTrainer only support pretrained models,but got {model}"
-            for param in model.parameters():
-                assert not param._is_initialized(), "intermediate_api needs lazy init"
-
-            auto_dist_degree = {
-                "tensor_parallel": kwargs["args"].tensor_parallel_degree > 1,
-                "sequence_parallel": sequence_parallel,
-                "pipeline_parallel": kwargs["args"].pipeline_parallel_degree > 1,
-                "data_sharding_parallel": kwargs["args"].dataset_world_size > 1,
-                "sharding": kwargs["args"].sharding,
-                "sharding_mesh_dim": kwargs["args"].sharding_parallel_mesh_dimension,
-            }
-            auto_dist_config = model._generate_auto_dist_config(auto_dist_degree)
-            self.auto_dist_config = auto_dist_config
-
-            model = parallelize_model(
-                model,
-                config=self.auto_dist_config,
-            )
-
-            kwargs["model"] = model
-
-        model = kwargs["model"]
-        for param in model.parameters():
-            if not param._is_initialized():
-                try:
-                    param.initialize()
-                except Exception as e:
-                    # NOTE(zhangwl):maybe param is not initialized and param init_func is set in later.user need set_init_func before auto_trainer
-                    logger.warning(
-                        f"AutoTrainer requires all parameters to be initialized when auto_trainer init, but failed to initialize parameter {param.name} {param}.\n"
-                        + "Please check param init func.\n"
-                        + f"The original exception message is:\n{str(e)}"
-                    )
-        kwargs["model"] = model
+        self.auto_dist_config = kwargs.pop("auto_dist_config", None)
 
         super().__init__(*args, **kwargs)
         assert self.args.enable_auto_parallel
@@ -122,6 +78,31 @@ class AutoTrainer(Trainer):
         self.global_mesh = fleet.auto.get_mesh()
         self.comm_group_in_pp = fleet.get_hybrid_communicate_group().get_pipe_parallel_group()
         self._in_pir_mode = paddle.base.framework.get_flags("FLAGS_enable_pir_api")["FLAGS_enable_pir_api"]
+
+    @classmethod
+    def parallel_model(cls, model, training_args, model_args):
+        sequence_parallel = False
+        if hasattr(model_args, "sequence_parallel"):
+            sequence_parallel = model_args.sequence_parallel
+        assert model is not None
+        for param in model.parameters():
+            assert not param._is_initialized(), "intermediate_api needs lazy init"
+
+        auto_dist_degree = {
+            "tensor_parallel": training_args.tensor_parallel_degree > 1,
+            "sequence_parallel": sequence_parallel,
+            "pipeline_parallel": training_args.pipeline_parallel_degree > 1,
+            "data_sharding_parallel": training_args.dataset_world_size > 1,
+            "sharding": training_args.sharding,
+            "sharding_mesh_dim": training_args.sharding_parallel_mesh_dimension,
+        }
+        auto_dist_config = model._generate_auto_dist_config(auto_dist_degree)
+        model = parallelize_model(
+            model,
+            config=auto_dist_config,
+        )
+
+        return model, auto_dist_config
 
     def _nested_gather(self, tensors):
         """
