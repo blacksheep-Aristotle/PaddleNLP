@@ -26,17 +26,19 @@ from paddle.distributed.auto_parallel.intermediate.parallelize import (
     parallelize_model,
     parallelize_optimizer,
 )
-from tqdm.auto import tqdm
 
-from paddlenlp.trainer import Trainer
-from paddlenlp.transformers.model_utils import PretrainedModel
+from paddlenlp.trl import SFTTrainer
 
-from ..utils.batch_sampler import DistributedBatchSampler as NlpDistributedBatchSampler
-from ..utils.log import logger
-from .argparser import strtobool
-from .trainer import SCALER_NAME, SCHEDULER_NAME, TRAINER_STATE_NAME, TRAINING_ARGS_NAME
-from .trainer_callback import TrainerState
-from .trainer_utils import (  # set_hyrbid_parallel_seed,
+from ..data import DataCollatorForSeq2Seq
+from ..trainer.argparser import strtobool
+from ..trainer.trainer import (
+    SCALER_NAME,
+    SCHEDULER_NAME,
+    TRAINER_STATE_NAME,
+    TRAINING_ARGS_NAME,
+)
+from ..trainer.trainer_callback import TrainerState
+from ..trainer.trainer_utils import (  # set_hyrbid_parallel_seed,
     PREFIX_CHECKPOINT_DIR,
     ShardingOption,
     TrainOutput,
@@ -45,11 +47,16 @@ from .trainer_utils import (  # set_hyrbid_parallel_seed,
     has_length,
     speed_metrics,
 )
-from .utils.ckpt_converter import CheckpointConverter
-from .utils.helper import distributed_file, distributed_isfile  # nested_truncate,
+from ..trainer.utils.ckpt_converter import CheckpointConverter
+from ..trainer.utils.helper import (  # nested_truncate,
+    distributed_file,
+    distributed_isfile,
+)
+from ..utils.batch_sampler import DistributedBatchSampler as NlpDistributedBatchSampler
+from ..utils.log import logger
 
 try:
-    from ..quantization.quantization_linear import QuantizationLinear
+    from ...quantization.quantization_linear import QuantizationLinear
 except:
     QuantizationLinear = None
 
@@ -59,8 +66,10 @@ DIST_CKPT_PATH = "dist_ckpt"
 DIST_MODEL_PATH = "dist_model"
 FREE_SVAE_LOAD_KEY_PATTERNS = ["learning_rate_", "gradient_merge_", "@GRAD@MERG", "eager_tmp"]
 
+__all__ = ["SFTAutoTrainer"]
 
-class AutoTrainer(Trainer):
+
+class SFTAutoTrainer(SFTTrainer):
     def __init__(self, *args, **kwargs):
 
         if kwargs.get("args", None) is not None and kwargs["args"].to_static:
@@ -76,14 +85,11 @@ class AutoTrainer(Trainer):
             model_args = kwargs.pop("model_args")
             if hasattr(model_args, "sequence_parallel"):
                 sequence_parallel = model_args.sequence_parallel
-
+        print(" use_intermediate_api ", kwargs["args"].use_intermediate_api)
         if kwargs.get("args", None) is not None and kwargs["args"].use_intermediate_api:
             model = kwargs.get("model", None)
             assert model is not None
-            assert isinstance(model, PretrainedModel), f" AutoTrainer only support pretrained models,but got {model}"
-            for param in model.parameters():
-                assert not param._is_initialized(), "intermediate_api needs lazy init"
-
+            # NOTE(zhangwl): some param_init_func is not suuport lazy init
             auto_dist_degree = {
                 "tensor_parallel": kwargs["args"].tensor_parallel_degree > 1,
                 "sequence_parallel": sequence_parallel,
@@ -94,12 +100,13 @@ class AutoTrainer(Trainer):
             }
             auto_dist_config = model._generate_auto_dist_config(auto_dist_degree)
             self.auto_dist_config = auto_dist_config
-
+            logger.info(f"auto_dist_config: {self.auto_dist_config}")
             model = parallelize_model(
                 model,
                 config=self.auto_dist_config,
             )
-
+            for p in model.parameters():
+                print(f"param {p.name} stop_gradient {p.stop_gradient}")
             kwargs["model"] = model
 
         model = kwargs["model"]
@@ -107,6 +114,19 @@ class AutoTrainer(Trainer):
             if not param._is_initialized():
                 param.initialize()
         kwargs["model"] = model
+
+        trainable_parameters = [p for p in model.parameters() if not p.stop_gradient]
+        self.set_optimizer_grouped_parameters(trainable_parameters)
+
+        assert kwargs["args"].max_seq_length is not None, "max_seq_length must be specified in auto_parallel"
+
+        if kwargs.get("data_collator", None) is None:
+            data_collator = DataCollatorForSeq2Seq(
+                max_length=kwargs["args"].max_seq_length,
+                max_label_length=kwargs["args"].max_seq_length,
+                padding="max_length",
+            )
+            kwargs["data_collator"] = data_collator
 
         super().__init__(*args, **kwargs)
         assert self.args.enable_auto_parallel
@@ -136,7 +156,7 @@ class AutoTrainer(Trainer):
     def _wrap_model(self, model, training=True):
         return model
 
-    def _get_meshes_for_loader(self):
+    def _get_meshes_for_loader(self, train_dataloader):
         def _get_mesh(pp_idx=0):
             return self.global_mesh.get_mesh_with_dim("pp")[pp_idx]
 
@@ -144,14 +164,22 @@ class AutoTrainer(Trainer):
         # error may occurs here.
         meshes = []
         meshes.append(_get_mesh(0))
+        data = next(train_dataloader())
+        if isinstance(data, dict):
+            data_num = len(list(data.values()))
+        elif isinstance(data, (list, tuple)):
+            data_num = len(data)
+        assert data_num >= 2
         if self.args.pipeline_parallel_degree > 1:
-            meshes.append(_get_mesh(self.args.pipeline_parallel_degree - 1))
+            for i in range(1, data_num):
+                meshes.append(_get_mesh(0))
+            meshes[-1] = _get_mesh(self.args.pipeline_parallel_degree - 1)
         return meshes
 
     def _wrap_for_dist_loader(self, train_dataloader):
         dist_loader = dist.shard_dataloader(
             dataloader=train_dataloader,
-            meshes=self._get_meshes_for_loader(),
+            meshes=self._get_meshes_for_loader(train_dataloader),
             shard_dims="dp",
         )
         return dist_loader
@@ -343,14 +371,17 @@ class AutoTrainer(Trainer):
             logger.info(f"  Continuing training from epoch {epochs_trained}")
             logger.info(f"  Continuing training from global step {self.state.global_step}")
             if not args.ignore_data_skip:
-                logger.info(
-                    f"  Will skip the first {epochs_trained} epochs then the first {steps_trained_in_current_epoch} "
-                    "batches in the first epoch. If this takes a lot of time, you can add the `--ignore_data_skip` "
-                    "flag to your launch command, but you will resume the training on data already seen by your model."
-                )
-                if self.is_local_process_zero() and not args.disable_tqdm:
-                    steps_trained_progress_bar = tqdm(total=steps_trained_in_current_epoch)
-                    steps_trained_progress_bar.set_description("Skipping the first batches")
+                if isinstance(train_dataloader, paddle.io.DataLoader) and isinstance(
+                    train_dataloader.batch_sampler, NlpDistributedBatchSampler
+                ):
+                    consumed_samples = (
+                        self.state.global_step
+                        * args.train_batch_size
+                        * args.gradient_accumulation_steps
+                        * args.dataset_world_size
+                    )
+                    train_dataloader.batch_sampler.set_epoch(consumed_samples=consumed_samples)
+                    logger.info(f"Set DistributedBatchSampler consumed_samples to {consumed_samples}")
 
         epoch_iterator = train_dataloader
         # steps_in_epoch = len(epoch_iterator)
@@ -387,7 +418,6 @@ class AutoTrainer(Trainer):
 
         model, dist_loader = self._wrap_for_auto(model, train_dataloader)
         train_dataloader = dist_loader()
-
         if resume_from_checkpoint is not None:
             self._load_from_checkpoint(resume_from_checkpoint)
 
@@ -429,14 +459,12 @@ class AutoTrainer(Trainer):
                     steps_trained_progress_bar = None
 
                 inputs_list = self._split_batches_for_accumulation(inputs)
-
-                for inputs in inputs_list:
+                for input in inputs_list:
                     if step_control % args.gradient_accumulation_steps == 0:
                         self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
                         self.timers and self.timers("forward-backward").start()
 
-                    tr_loss_step = self.training_step(model, inputs)
-
+                    tr_loss_step = self.training_step(model, input)
                     with _exec_mode_guard("dynamic"):
                         tr_loss += tr_loss_step
 
@@ -477,7 +505,7 @@ class AutoTrainer(Trainer):
                         self.state.global_step += 1
                         self.state.epoch = epoch + (step + 1) / steps_in_epoch
                         self.control = self.callback_handler.on_step_end(args, self.state, self.control)
-                        self._maybe_log_save_evaluate(tr_loss, model, epoch, ignore_keys_for_eval, inputs=inputs)
+                        self._maybe_log_save_evaluate(tr_loss, model, epoch, ignore_keys_for_eval, inputs=input)
                         self._print_timer()
                         step_control = 0
                     else:
@@ -535,7 +563,7 @@ class AutoTrainer(Trainer):
 
         return paddle.io.BatchSampler(
             dataset=self.train_dataset,
-            shuffle=True,
+            shuffle=False,
             batch_size=total_batch_size,
             drop_last=self.args.dataloader_drop_last,
         )
@@ -607,9 +635,11 @@ class AutoTrainer(Trainer):
         return loss
 
     def static_training(self, model: nn.Layer, inputs: Dict[str, Union[paddle.Tensor, Any]]) -> paddle.Tensor:
-        input_ids, labels = tuple(inputs.values())
-        loss = model(input_ids, labels)
-
+        # NOTE(zhangwl):need support input attention_mask in static mode
+        input_data = list(inputs.values())
+        loss = model(*input_data)
+        # inputs = list(inputs.values())
+        # loss = model(*inputs)
         if loss is not None and self.args.gradient_accumulation_steps > 1 and not self._enable_delay_scale_loss():
             loss = loss / self.args.gradient_accumulation_steps
 
@@ -666,6 +696,7 @@ class AutoTrainer(Trainer):
 
     def _maybe_log_save_evaluate(self, tr_loss, model, epoch, ignore_keys_for_eval, **kwargs):
         with _exec_mode_guard("dynamic"):
+            self.control.should_evaluate = False
             super()._maybe_log_save_evaluate(tr_loss, model, epoch, ignore_keys_for_eval, **kwargs)
 
     def _save_model(self):
