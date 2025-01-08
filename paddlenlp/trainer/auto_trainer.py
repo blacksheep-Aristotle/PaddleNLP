@@ -44,6 +44,7 @@ from .trainer_utils import (  # set_hyrbid_parallel_seed,
     has_length,
     speed_metrics,
 )
+from .training_args import AutoTrainingArguments
 from .utils.ckpt_converter import CheckpointConverter
 from .utils.helper import distributed_file, distributed_isfile  # nested_truncate,
 
@@ -80,10 +81,11 @@ class AutoTrainer(Trainer):
         self._in_pir_mode = paddle.base.framework.get_flags("FLAGS_enable_pir_api")["FLAGS_enable_pir_api"]
 
     @classmethod
-    def parallel_model(cls, model, training_args, model_args):
+    def parallel_model(cls, model, training_args: AutoTrainingArguments):
+        if not training_args.use_intermediate_api:
+            return model, None
         sequence_parallel = False
-        if hasattr(model_args, "sequence_parallel"):
-            sequence_parallel = model_args.sequence_parallel
+        sequence_parallel = training_args.sequence_parallel
         assert model is not None
         for param in model.parameters():
             assert not param._is_initialized(), "intermediate_api needs lazy init"

@@ -608,9 +608,7 @@ def main():
         tokenizer,
         need_data=training_args.should_load_dataset,
     )
-    model, auto_dist_config = PretrainingTrainer.parallel_model(
-        model, training_args=training_args, model_args=model_args
-    )
+    model, auto_dist_config = PretrainingTrainer.parallel_model(model, training_args=training_args)
     for param in model.parameters():
         if not param._is_initialized():
             param.initialize()

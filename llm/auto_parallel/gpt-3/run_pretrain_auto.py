@@ -225,10 +225,6 @@ class ModelArguments:
     hidden_dropout_prob: float = field(default=0.1, metadata={"help": "The hidden dropout prob."})
     attention_probs_dropout_prob: float = field(default=0.1, metadata={"help": "The attention hidden dropout prob."})
 
-    sequence_parallel: bool = field(
-        default=False,
-        metadata={"help": "whether to use sequence parallel"},
-    )
     fuse_sequence_parallel_allreduce: bool = field(
         default=False,
         metadata={"help": "whether to use fuse sequence parallel allreduce"},
@@ -574,9 +570,7 @@ def main():
         need_data=training_args.should_load_dataset,
     )
 
-    model, auto_dist_config = PretrainingTrainer.parallel_model(
-        model, training_args=training_args, model_args=model_args
-    )
+    model, auto_dist_config = PretrainingTrainer.parallel_model(model, training_args=training_args)
     for param in model.parameters():
         if not param._is_initialized():
             param.initialize()

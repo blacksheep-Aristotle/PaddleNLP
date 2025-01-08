@@ -669,6 +669,10 @@ class TrainingArguments:
             )
         },
     )
+    sequence_parallel: bool = field(
+        default=False,
+        metadata={"help": "whether to use sequence parallel"},
+    )
     sequence_parallel_config: str = field(
         default="",
         metadata={
