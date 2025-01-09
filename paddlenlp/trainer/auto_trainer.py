@@ -23,6 +23,7 @@ import paddle.distributed as dist
 import paddle.nn as nn
 from paddle.distributed import fleet
 from paddle.distributed.auto_parallel.intermediate.parallelize import (
+    is_parallelized_model,
     parallelize_model,
     parallelize_optimizer,
 )
@@ -70,9 +71,36 @@ class AutoTrainer(Trainer):
                     return loss
 
                 kwargs.update({"criterion": loss_func})
-
         self.auto_dist_config = kwargs.pop("auto_dist_config", None)
-
+        model = kwargs.get("model", None)
+        assert model is not None
+        if (
+            kwargs.get("args", None) is not None
+            and kwargs["args"].use_intermediate_api
+            and not is_parallelized_model()
+        ):
+            if self.auto_dist_config is not None:
+                for param in model.parameters():
+                    if param._is_initialized():
+                        logger.warning(
+                            "intermediate_api needs lazy init because if param init before parallelize_model ,"
+                            + " param will be allocated the full amount of memory"
+                            + " We recommend reallocating memory after paralleliz-model to reduce the peak of memory allocation"
+                        )
+                model = parallelize_model(
+                    model,
+                    config=self.auto_dist_config,
+                )
+            else:
+                model, self.auto_dist_config = self.parallel_model(model, kwargs["args"])
+                kwargs["model"] = model
+        model = kwargs["model"]
+        for param in model.parameters():
+            # NOTE(zhangwl):in pipeline mode , param my be initialized before while delte init_func ,but param is still not is_initialized
+            if not param._is_initialized() and param._init_func is not None:
+                param.initialize()
+        kwargs["model"] = model
+        print("auto_trainer is_parallelized_model", is_parallelized_model())
         super().__init__(*args, **kwargs)
         assert self.args.enable_auto_parallel
 
@@ -87,7 +115,12 @@ class AutoTrainer(Trainer):
         sequence_parallel = training_args.sequence_parallel
         assert model is not None
         for param in model.parameters():
-            assert not param._is_initialized(), "intermediate_api needs lazy init"
+            if param._is_initialized():
+                logger.warning(
+                    "intermediate_api needs lazy init because if param init before parallelize_model ,"
+                    + " param will be allocated the full amount of memory"
+                    + " We recommend reallocating memory after paralleliz-model to reduce the peak of memory allocation"
+                )
 
         auto_dist_degree = {
             "tensor_parallel": training_args.tensor_parallel_degree > 1,
@@ -102,7 +135,6 @@ class AutoTrainer(Trainer):
             model,
             config=auto_dist_config,
         )
-
         return model, auto_dist_config
 
     def _nested_gather(self, tensors):
