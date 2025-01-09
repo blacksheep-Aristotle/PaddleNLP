@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-GPT/Llama auto parallel pretraining scripts.
+GPT/Llama/Qwen auto parallel pretraining scripts.
 """
 import os
 import random
@@ -42,12 +42,26 @@ from paddlenlp.transformers import (
     GPTPretrainingCriterionAuto,
     GPTPretrainingCriterionNet,
     LinearAnnealingWithWarmupDecay,
+    LlamaConfig,
+    LlamaForCausalLM3DAuto,
+    LlamaForCausalLMNet,
+    LlamaPretrainingCriterion3DAuto,
+    LlamaPretrainingCriterionNet,
+    QWenConfig,
+    QWenForCausalLM3DAuto,
+    QWenForCausalLMNet,
+    QWenPretrainingCriterionAuto,
+    QWenPretrainingCriterionNet,
 )
 from paddlenlp.utils.log import logger
 
 MODEL_CLASSES = {
     "gpt": (GPTConfig, GPTForCausalLMAuto, GPTPretrainingCriterionAuto),
     "gpt_network": (GPTConfig, GPTForCausalLMNet, GPTPretrainingCriterionNet),
+    "llama": (LlamaConfig, LlamaForCausalLM3DAuto, LlamaPretrainingCriterion3DAuto),
+    "llama_network": (LlamaConfig, LlamaForCausalLMNet, LlamaPretrainingCriterionNet),
+    "qwen": (QWenConfig, QWenForCausalLM3DAuto, QWenPretrainingCriterionAuto),
+    "qwen_network": (QWenConfig, QWenForCausalLMNet, QWenPretrainingCriterionNet),
 }
 
 from paddlenlp.data.causal_dataset import (
@@ -56,6 +70,9 @@ from paddlenlp.data.causal_dataset import (
     print_rank_0,
 )
 from paddlenlp.trainer.utils.doc import add_start_docstrings
+
+# Pretaining Environment Variables to support sharding stage1 overlap optimization.
+os.environ["USE_CASUAL_MASK"] = "True"
 
 
 @dataclass
@@ -90,6 +107,14 @@ class PreTrainingArguments(AutoTrainingArguments):
     autotuner_benchmark: bool = field(
         default=False,
         metadata={"help": "Weather to run benchmark by autotuner. True for from_scratch and pad_max_length."},
+    )
+    fine_grained_log: bool = field(
+        default=False,
+        metadata={"help": "whether print find-grained performance log"},
+    )
+    use_intermediate_api: bool = field(
+        default=False,
+        metadata={"help": "Weather to use auto_parallel intermediate api"},
     )
 
     def __post_init__(self):
@@ -256,14 +281,14 @@ def create_pretrained_dataset(
 
     train_val_test_num_samples = [
         training_args.per_device_train_batch_size
-        * training_args.data_parallel_degree
+        * training_args.dataset_world_size
         * training_args.max_steps
         * training_args.gradient_accumulation_steps,
         training_args.per_device_eval_batch_size
-        * training_args.data_parallel_degree
+        * training_args.dataset_world_size
         * training_args.eval_iters
         * (training_args.max_steps // training_args.eval_steps + 1),
-        training_args.per_device_eval_batch_size * training_args.data_parallel_degree * training_args.test_iters,
+        training_args.per_device_eval_batch_size * training_args.dataset_world_size * training_args.test_iters,
     ]
 
     print_rank_0(" > datasets target sizes (minimum size):")
@@ -354,6 +379,24 @@ class PretrainingTrainer(AutoTrainer):
         dist_loader._input_keys = ["input_ids", "labels"]
         return dist_loader
 
+    def _get_train_sampler(self) -> Optional[paddle.io.Sampler]:
+        if self.train_dataset is None:
+            return None
+
+        total_batch_size_per_acc_step = self.args.per_device_train_batch_size * self.args.dataset_world_size
+        total_batch_size = total_batch_size_per_acc_step
+
+        # In llm/llama/run_pretrain.py, it uses paddlenlp.utils.batch_sampler.DistributedBatchSampler,
+        # which does no shuffle when shuffle is set True.
+        sampler = paddle.io.BatchSampler(
+            dataset=self.train_dataset,
+            shuffle=False,
+            batch_size=total_batch_size,
+            drop_last=self.args.dataloader_drop_last,
+        )
+        sampler._acc_steps = self.args.gradient_accumulation_steps
+        return sampler
+
 
 def print_config(args, key=""):
     """
@@ -393,10 +436,10 @@ def init_seed(seed: int = 1234, args=None):
             topo = Topology(
                 dist.get_rank(),
                 dist.get_world_size(),
-                dp_degree=max(args.data_parallel_degree, args.sharding_parallel_degree),
+                dp_degree=args.dataset_world_size,
                 pp_degree=args.pipeline_parallel_degree,
                 mp_degree=args.tensor_parallel_degree,
-                sharding_degree=1,
+                sharding_degree=1,  # auto_parallel's sharding is not orthogonal with dp, mp and pp
                 order=order,
             )
 
@@ -503,6 +546,7 @@ def main():
     config.use_recompute = training_args.recompute
     config.tensor_parallel_degree = training_args.tensor_parallel_degree
     config.tensor_parallel_rank = training_args.tensor_parallel_rank
+    config.sharding_parallel_degree = training_args.sharding_parallel_degree
 
     if training_args.strategy.pipeline.enable and config.virtual_pp_degree > 1:
         pipeline = training_args.strategy.pipeline
@@ -511,6 +555,7 @@ def main():
 
     config.hidden_dropout_prob = model_args.hidden_dropout_prob
     config.attention_probs_dropout_prob = model_args.attention_probs_dropout_prob
+    config.fine_grained_log = training_args.fine_grained_log
     print("Final pre-training config:", config)
 
     # Set the dtype for loading model
@@ -536,7 +581,11 @@ def main():
     # Create the learning_rate sheduler and optimizer
     if training_args.decay_steps is None:
         training_args.decay_steps = training_args.max_steps
-    warmup_steps = training_args.warmup_ratio * training_args.max_steps
+
+    if training_args.warmup_steps > 0:
+        warmup_steps = training_args.warmup_steps
+    else:
+        warmup_steps = training_args.warmup_ratio * training_args.max_steps
 
     lr_scheduler = None
     if training_args.lr_scheduler_type.value == "cosine":
@@ -574,6 +623,7 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         optimizers=(None, lr_scheduler),
         tokenizer=tokenizer,
+        model_args=model_args,
     )
 
     checkpoint = None
@@ -585,6 +635,7 @@ def main():
     # Training
     if training_args.do_train:
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
+
         # NOTE(gongenlei): new add
         if not training_args.autotuner_benchmark:
             metrics = train_result.metrics
@@ -593,6 +644,15 @@ def main():
             trainer.log_metrics("train", metrics)
             trainer.save_metrics("train", metrics)
             trainer.save_state()
+
+    if training_args.do_predict:
+        test_ret = trainer.predict(test_dataset)
+        trainer.log_metrics("test", test_ret.metrics)
+
+    # if training_args.should_load_dataset:
+    #     effective_tokens_per_second = total_effective_tokens / train_result.metrics["train_runtime"]
+    #     print(f"Effective Tokens per second: {effective_tokens_per_second:.2f}")
+    #     print(f"ips: {effective_tokens_per_second:.2f} tokens/s")
 
 
 if __name__ == "__main__":

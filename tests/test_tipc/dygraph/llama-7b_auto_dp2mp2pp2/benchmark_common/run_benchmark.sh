@@ -72,7 +72,7 @@ function _train(){
         use_fp16_cmd="--fp16 1 --fp16_opt_level O2"
     fi
     to_static=0  # 是否开启动转静训练
-    train_cmd="run_pretrain_auto.py \
+    train_cmd="../run_pretrain_auto.py \
             --model_type "llama" \
             --model_name_or_path "facebook/llama-7b" \
             --tokenizer_name_or_path "facebook/llama-7b" \

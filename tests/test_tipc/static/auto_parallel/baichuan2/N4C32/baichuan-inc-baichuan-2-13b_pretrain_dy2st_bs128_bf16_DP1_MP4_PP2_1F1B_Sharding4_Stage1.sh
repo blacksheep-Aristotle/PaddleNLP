@@ -18,7 +18,7 @@ param+="device_num=N4C32 "
 param+="global_batch_size=128 "
 param+="nnodes=4 "
 param+="model_type=baichuan2_13b "
-
+unset CUDA_MODULE_LOADING
 cd ./tests
 bash ./test_tipc/static/auto_parallel/baichuan2/benchmark_common/prepare.sh
 

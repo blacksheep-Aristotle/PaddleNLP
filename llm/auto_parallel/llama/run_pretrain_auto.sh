@@ -38,7 +38,7 @@ to_static=0  # 是否开启动转静训练
 python -u  -m paddle.distributed.launch \
     --gpus "0,1,2,3,4,5,6,7" \
     --log_dir "auto_3d" \
-    run_pretrain_auto.py \
+    ../run_pretrain_auto.py \
     --model_type "llama" \
     --model_name_or_path "facebook/llama-7b" \
     --tokenizer_name_or_path "facebook/llama-7b" \

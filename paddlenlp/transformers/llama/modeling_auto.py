@@ -83,6 +83,11 @@ __all__ = [
 ]
 
 
+def get_use_casual_mask():
+    """Get the value of the 'USE_CASUAL_MASK' environment variable."""
+    return os.getenv("USE_CASUAL_MASK", "False") == "True"
+
+
 def enable_fuse_ffn_qkv_pass():
     if os.getenv("FLAGS_enable_fused_ffn_qkv_pass") in [
         "True",

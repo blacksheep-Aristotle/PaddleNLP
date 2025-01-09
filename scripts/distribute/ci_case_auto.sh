@@ -194,7 +194,7 @@ function llama_dygraph_auto_bs8_fp32_DP2() {
     rm -rf $case_out_dir
     rm -rf $case_log_dir
 
-    python -u -m paddle.distributed.launch --gpus "0,1" --log_dir $case_log_dir run_pretrain_auto.py \
+    python -u -m paddle.distributed.launch --gpus "0,1" --log_dir $case_log_dir ../run_pretrain_auto.py \
         --model_type "llama" \
         --model_name_or_path "facebook/llama-7b" \
         --tokenizer_name_or_path "facebook/llama-7b" \
@@ -264,7 +264,7 @@ function llama_dygraph_auto_bs8_fp32_DP2-MP2() {
     rm -rf $case_out_dir
     rm -rf $case_log_dir
 
-    python -u -m paddle.distributed.launch --gpus "0,1,2,3" --log_dir $case_log_dir run_pretrain_auto.py \
+    python -u -m paddle.distributed.launch --gpus "0,1,2,3" --log_dir $case_log_dir ../run_pretrain_auto.py \
         --model_type "llama" \
         --model_name_or_path "facebook/llama-7b" \
         --tokenizer_name_or_path "facebook/llama-7b" \
@@ -334,7 +334,7 @@ function llama_dygraph_auto_bs8_fp32_DP2-MP2-PP2() {
     rm -rf $case_out_dir
     rm -rf $case_log_dir
 
-    python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" --log_dir $case_log_dir run_pretrain_auto.py \
+    python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" --log_dir $case_log_dir ../run_pretrain_auto.py \
         --model_type "llama" \
         --model_name_or_path "facebook/llama-7b" \
         --tokenizer_name_or_path "facebook/llama-7b" \
@@ -404,7 +404,7 @@ function llama_dygraph_auto_bs8_fp16_DP2-MP2-PP2() {
     rm -rf $case_out_dir
     rm -rf $case_log_dir
 
-    python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" --log_dir $case_log_dir run_pretrain_auto.py \
+    python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" --log_dir $case_log_dir ../run_pretrain_auto.py \
         --model_type "llama" \
         --model_name_or_path "facebook/llama-7b" \
         --tokenizer_name_or_path "facebook/llama-7b" \
@@ -474,7 +474,7 @@ function llama_dygraph_auto_bs8_fp16_DP2-MP2-PP2_intermediate() {
     rm -rf $case_out_dir
     rm -rf $case_log_dir
 
-    python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" --log_dir $case_log_dir run_pretrain_auto.py \
+    python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" --log_dir $case_log_dir ../run_pretrain_auto.py \
         --model_type "llama_network" \
         --use_intermediate_api 1\
         --model_name_or_path "facebook/llama-7b" \
@@ -557,7 +557,7 @@ function llama_dy2st_auto_bs4_bf16_DP1-MP1-PP4-SD2() {
         python -u  -m paddle.distributed.launch \
             --gpus "0,1,2,3,4,5,6,7" \
             --log_dir  "output/$task_name""_log" \
-            ./run_pretrain_auto.py \
+            ../run_pretrain_auto.py \
             --model_name_or_path "meta-llama/Llama-2-13b" \
             --tokenizer_name_or_path "meta-llama/Llama-2-13b" \
             --input_dir "./data" \
@@ -657,7 +657,7 @@ function llama_dy2st_auto_bs4_bf16_DP1-MP1-PP4-SD2-VPP3_split_bw() {
         python -u  -m paddle.distributed.launch \
             --gpus "0,1,2,3,4,5,6,7" \
             --log_dir  "output/$task_name""_log" \
-            ./run_pretrain_auto.py \
+            ../run_pretrain_auto.py \
             --model_name_or_path "meta-llama/Llama-2-13b" \
             --tokenizer_name_or_path "meta-llama/Llama-2-13b" \
             --input_dir "./data" \
@@ -874,7 +874,7 @@ function llama_pir_auto_fuse_ffn_attention_qkv_MP2() {
         python -u -m paddle.distributed.launch \
             --gpus "0,1" \
             --log_dir $auto_case_log_dir \
-            run_pretrain_auto.py \
+            ../run_pretrain_auto.py \
             --model_name_or_path "facebook/llama-7b" \
             --tokenizer_name_or_path "facebook/llama-7b" \
             --input_dir "./data" \
@@ -988,7 +988,7 @@ function llama_align_dygraph_dy2st_pir_auto_bs2_bf16_DP2-MP2-PP2-SP() {
         python -u -m paddle.distributed.launch \
             --gpus "0,1,2,3,4,5,6,7" \
             --log_dir $case_log_dir \
-            run_pretrain_auto.py \
+            ../run_pretrain_auto.py \
             --model_type "llama" \
             --model_name_or_path "facebook/llama-7b" \
             --tokenizer_name_or_path "facebook/llama-7b" \
@@ -1080,7 +1080,7 @@ function llama_align_dygraph_dy2st_auto_bs2_bf16_DP2-MP1-PP1() {
         python -u -m paddle.distributed.launch \
             --gpus "0,1" \
             --log_dir $case_log_dir \
-            run_pretrain_auto.py \
+            ../run_pretrain_auto.py \
             --model_type "llama" \
             --model_name_or_path "facebook/llama-7b" \
             --tokenizer_name_or_path "facebook/llama-7b" \
@@ -1180,7 +1180,7 @@ function llama_dy2st_auto_bs2_bf16_DP2-MP1-PP1-CINN() {
     python -u -m paddle.distributed.launch \
         --gpus "0,1" \
         --log_dir $case_log_dir \
-        run_pretrain_auto.py \
+        ../run_pretrain_auto.py \
         --model_type "llama" \
         --model_name_or_path "facebook/llama-7b" \
         --tokenizer_name_or_path "facebook/llama-7b" \
@@ -1284,7 +1284,7 @@ function llama_align_dygraph_dy2st_pir_auto_grad_merge_bs2_fp32_DP1-MP1-PP1() {
         /usr/bin/python -u -m paddle.distributed.launch \
             --gpus "0" \
             --log_dir $case_log_dir \
-            run_pretrain_auto.py \
+            ../run_pretrain_auto.py \
             --model_type "llama" \
             --model_name_or_path "facebook/llama-7b" \
             --tokenizer_name_or_path "facebook/llama-7b" \
@@ -1391,7 +1391,7 @@ function llama_align_dy2st_fthenb_and_vpp_auto_bs2_fp32_DP1-MP1-PP4() {
         python -u -m paddle.distributed.launch \
             --gpus "0,1,2,3" \
             --log_dir $case_log_dir \
-            run_pretrain_auto.py \
+            ../run_pretrain_auto.py \
             --model_type "llama" \
             --model_name_or_path "facebook/llama-7b" \
             --tokenizer_name_or_path "facebook/llama-7b" \
@@ -1509,7 +1509,7 @@ function llama_align_dygraph_dy2st_pir_auto_pp_bs2_bf16_DP1-MP1-PP4() {
         python -u -m paddle.distributed.launch \
             --gpus "0,1,2,3" \
             --log_dir $case_log_dir \
-            run_pretrain_auto.py \
+            ../run_pretrain_auto.py \
             --model_type "llama" \
             --model_name_or_path "facebook/llama-7b" \
             --tokenizer_name_or_path "facebook/llama-7b" \
@@ -1675,7 +1675,7 @@ function llama_convert_hybrid_ckpt_to_auto_parallel_bs2_fp32_DP2-MP1-PP1() {
     python -u -m paddle.distributed.launch \
         --gpus "0,1" \
         --log_dir $auto_case_log_dir \
-        run_pretrain_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path "facebook/llama-7b" \
         --tokenizer_name_or_path "facebook/llama-7b" \
         --input_dir "./data" \
@@ -1756,7 +1756,7 @@ function llama_baichuan_pir_auto_fuse_ffn_attention_qkv_DP2_MP2_PP2(){
     rm -rf $case_out_dir
     rm -rf $case_log_dir
 
-    python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" --log_dir $case_log_dir run_pretrain_auto.py \
+    python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" --log_dir $case_log_dir ../run_pretrain_auto.py \
         --model_type "llama" \
         --model_name_or_path "baichuan-inc/Baichuan2-13B-Base" \
         --tokenizer_name_or_path "baichuan-inc/Baichuan2-13B-Base" \
@@ -1827,7 +1827,7 @@ function llama_baichuan_pir_auto_fuse_ffn_attention_qkv_DP2_MP2_PP2_intermediate
     rm -rf $case_out_dir
     rm -rf $case_log_dir
 
-    python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" --log_dir $case_log_dir run_pretrain_auto.py \
+    python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" --log_dir $case_log_dir ../run_pretrain_auto.py \
         --model_type "llama_network" \
         --use_intermediate_api true \
         --model_name_or_path "baichuan-inc/Baichuan2-13B-Base" \
@@ -1902,7 +1902,7 @@ function llm_gpt_dygraph_auto_bs8_fp32_DP2() {
 
     python -u -m paddle.distributed.launch --gpus "0,1" \
         --log_dir $case_log_dir \
-        run_pretrain_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path gpt2-medium-en \
         --tokenizer_name_or_path gpt2-medium-en \
         --input_dir "$gpt_data_path/data" \
@@ -1974,7 +1974,7 @@ function llm_gpt_dygraph_auto_bs8_fp32_DP2-MP2() {
 
     python -u -m paddle.distributed.launch --gpus "0,1,2,3" \
         --log_dir $case_log_dir \
-        run_pretrain_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path gpt2-medium-en \
         --tokenizer_name_or_path gpt2-medium-en \
         --input_dir "$gpt_data_path/data" \
@@ -2046,7 +2046,7 @@ function llm_gpt_dygraph_auto_bs8_fp32_DP2-MP2-PP2() {
 
     python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" \
         --log_dir $case_log_dir \
-        run_pretrain_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path gpt2-medium-en \
         --tokenizer_name_or_path gpt2-medium-en \
         --input_dir "$gpt_data_path/data" \
@@ -2119,7 +2119,7 @@ function llm_gpt_dygraph_auto_bs8_fp16_DP2-MP2-PP2() {
 
     python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" \
         --log_dir $case_log_dir \
-        run_pretrain_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path gpt2-medium-en \
         --tokenizer_name_or_path gpt2-medium-en \
         --input_dir "$gpt_data_path/data" \
@@ -2192,7 +2192,7 @@ function llm_gpt_dygraph_auto_bs8_fp16_DP2-MP2-PP2_intermediate() {
 
     python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" \
         --log_dir $case_log_dir \
-        run_pretrain_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path gpt2-medium-en \
         --tokenizer_name_or_path gpt2-medium-en \
         --input_dir "$gpt_data_path/data" \
@@ -2265,7 +2265,7 @@ function llm_gpt_pir_auto_bs4_TP2(){
 
     python -u -m paddle.distributed.launch --gpus "0,1" \
         --log_dir $case_log_dir \
-        run_pretrain_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path gpt3-13B-en \
         --tokenizer_name_or_path gpt3-13B-en \
         --input_dir "$gpt_data_path/data" \
@@ -2326,7 +2326,7 @@ function llm_gpt_pir_auto_bs4_TP2_PP2(){
 
     python -u -m paddle.distributed.launch --gpus "0,1,2,3" \
         --log_dir $case_log_dir \
-        run_pretrain_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path gpt3-13B-en \
         --tokenizer_name_or_path gpt3-13B-en \
         --input_dir "$gpt_data_path/data" \
@@ -2387,7 +2387,7 @@ function llm_gpt_pir_auto_bs8_DP2_TP2_PP2(){
 
     python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" \
         --log_dir $case_log_dir \
-        run_pretrain_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path gpt3-13B-en \
         --tokenizer_name_or_path gpt3-13B-en \
         --input_dir "$gpt_data_path/data" \
@@ -2453,7 +2453,7 @@ function llm_gpt_pir_auto_bs8_DP2_TP2_PP2_intermediate(){
 
     python -u -m paddle.distributed.launch --gpus "0,1,2,3,4,5,6,7" \
         --log_dir $case_log_dir \
-        run_pretrain_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path gpt3-13B-en \
         --tokenizer_name_or_path gpt3-13B-en \
         --input_dir "$gpt_data_path/data" \
@@ -2580,7 +2580,7 @@ EOF
     python -u  -m paddle.distributed.launch \
             --gpus "0,1" \
             --log_dir "$case_log_dir" \
-        run_pretrain_3D_auto.py ./$config_json \
+        ../run_pretrain_auto.py ./$config_json \
         >>${log_path}/$FUNCNAME 2>&1
     loss=`cat $case_log_dir/workerlog.0 | grep 'global_step: 10' | awk -F 'loss: ' '{print $2}' | awk -F ',' '{print $1}'`
     ips=-1
@@ -2673,7 +2673,7 @@ EOF
     python -u  -m paddle.distributed.launch \
             --gpus "0,1,2,3" \
             --log_dir "$case_log_dir" \
-        run_pretrain_3D_auto.py $config_json \
+        ../run_pretrain_auto.py $config_json \
         >>${log_path}/$FUNCNAME 2>&1
     loss=`cat $case_log_dir/workerlog.0 | grep 'global_step: 10' | awk -F 'loss: ' '{print $2}' | awk -F ',' '{print $1}'`
     ips=-1
@@ -2766,7 +2766,7 @@ EOF
     python -u  -m paddle.distributed.launch \
             --gpus "0,1,2,3,4,5,6,7" \
             --log_dir "$case_log_dir" \
-        run_pretrain_3D_auto.py $config_json \
+        ../run_pretrain_auto.py $config_json \
         >>${log_path}/$FUNCNAME 2>&1
     loss=`cat $case_log_dir/workerlog.0 | grep 'global_step: 10' | awk -F 'loss: ' '{print $2}' | awk -F ',' '{print $1}'`
     ips=-1
@@ -2859,7 +2859,7 @@ EOF
     python -u  -m paddle.distributed.launch \
             --gpus "0,1,2,3,4,5,6,7" \
             --log_dir "$case_log_dir" \
-        run_pretrain_3D_auto.py $config_json \
+        ../run_pretrain_auto.py $config_json \
         >>${log_path}/$FUNCNAME 2>&1
     loss=`cat $case_log_dir/workerlog.0 | grep 'global_step: 10' | awk -F 'loss: ' '{print $2}' | awk -F ',' '{print $1}'`
     ips=-1
@@ -2905,7 +2905,7 @@ function llm_qwen_pir_auto_bs1_bf16_TP2(){
     python -u  -m paddle.distributed.launch \
         --gpus "0,1" \
         --log_dir "$case_log_dir" \
-        run_pretrain_3D_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path "qwen/qwen-14b" \
         --tokenizer_name_or_path "qwen/qwen-14b" \
         --input_dir "./data" \
@@ -2984,7 +2984,7 @@ function llm_qwen_pir_auto_bs1_bf16_TP2_PP2(){
     python -u  -m paddle.distributed.launch \
         --gpus "0,1,2,3" \
         --log_dir "$case_log_dir" \
-        run_pretrain_3D_auto.py \
+        ../run_pretrain_auto.py \
         --model_name_or_path "qwen/qwen-14b" \
         --tokenizer_name_or_path "qwen/qwen-14b" \
         --input_dir "./data" \

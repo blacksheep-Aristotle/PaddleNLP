@@ -10,7 +10,7 @@
     "tensor_parallel_degree": 2,
     "pipeline_parallel_degree": 4,
     "virtual_pp_degree": 5,
-    "pipeline_schedule_mode": "1F1B",
+    "pipeline_schedule_mode": "VPP",
     "virtual_pipeline_seg_method": "QWenBlockAuto",
     "use_flash_attention": true,
     "use_fused_rms_norm": false,

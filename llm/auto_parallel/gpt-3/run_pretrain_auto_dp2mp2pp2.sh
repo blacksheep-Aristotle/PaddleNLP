@@ -31,7 +31,7 @@ rm -rf $output_dir
 python -u -m paddle.distributed.launch \
     --gpus "0,1,2,3,4,5,6,7" \
     --log_dir ${log_dir} \
-    run_pretrain_auto.py \
+    ../run_pretrain_auto.py \
     --model_name_or_path gpt2-medium-en \
     --tokenizer_name_or_path gpt2-medium-en \
     --input_dir "../data" \
