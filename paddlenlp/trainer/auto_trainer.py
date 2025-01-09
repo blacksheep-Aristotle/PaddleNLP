@@ -75,21 +75,14 @@ class AutoTrainer(Trainer):
             and kwargs["args"].use_intermediate_api
             and not parallelize.has_parallelized_model
         ):
-            if self.auto_dist_config is not None:
-                for param in model.parameters():
-                    if param._is_initialized():
-                        logger.warning(
-                            "intermediate_api needs lazy init because if param init before parallelize_model ,"
-                            + " param will be allocated the full amount of memory"
-                            + " We recommend reallocating memory after paralleliz-model to reduce the peak of memory allocation"
-                        )
-                model = parallelize.parallelize_model(
-                    model,
-                    config=self.auto_dist_config,
-                )
-            else:
+            if not parallelize.has_parallelized_model:
                 model, self.auto_dist_config = self.parallel_model(model, kwargs["args"])
                 kwargs["model"] = model
+            else:
+                assert kwargs.get(
+                    "auto_dist_config", None
+                ), "if use AutoTrainer.parallel_model , auto_dist_config obtained from parallel_model should be passed to AutoTrainer  "
+                self.auto_dist_config = kwargs.pop("auto_dist_config")
         model = kwargs["model"]
         for param in model.parameters():
             # NOTE(zhangwl):in pipeline mode , param my be initialized before while delte init_func ,but param is still not is_initialized
@@ -107,7 +100,6 @@ class AutoTrainer(Trainer):
     def parallel_model(cls, model, training_args: AutoTrainingArguments):
         if not training_args.use_intermediate_api:
             return model, None
-        sequence_parallel = training_args.sequence_parallel
         assert model is not None
         for param in model.parameters():
             if param._is_initialized():
@@ -119,7 +111,7 @@ class AutoTrainer(Trainer):
 
         auto_dist_degree = {
             "tensor_parallel": training_args.tensor_parallel_degree > 1,
-            "sequence_parallel": sequence_parallel,
+            "sequence_parallel": training_args.sequence_parallel,
             "pipeline_parallel": training_args.pipeline_parallel_degree > 1,
             "data_sharding_parallel": training_args.dataset_world_size > 1,
             "sharding": training_args.sharding,
