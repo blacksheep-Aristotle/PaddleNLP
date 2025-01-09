@@ -20,13 +20,9 @@ from typing import Any, Dict, Optional, Union
 import numpy as np
 import paddle
 import paddle.distributed as dist
+import paddle.distributed.auto_parallel.intermediate.parallelize as parallelize
 import paddle.nn as nn
 from paddle.distributed import fleet
-from paddle.distributed.auto_parallel.intermediate.parallelize import (
-    is_parallelized_model,
-    parallelize_model,
-    parallelize_optimizer,
-)
 from tqdm.auto import tqdm
 
 from paddlenlp.trainer import Trainer
@@ -77,7 +73,7 @@ class AutoTrainer(Trainer):
         if (
             kwargs.get("args", None) is not None
             and kwargs["args"].use_intermediate_api
-            and not is_parallelized_model()
+            and not parallelize.has_parallelized_model
         ):
             if self.auto_dist_config is not None:
                 for param in model.parameters():
@@ -87,7 +83,7 @@ class AutoTrainer(Trainer):
                             + " param will be allocated the full amount of memory"
                             + " We recommend reallocating memory after paralleliz-model to reduce the peak of memory allocation"
                         )
-                model = parallelize_model(
+                model = parallelize.parallelize_model(
                     model,
                     config=self.auto_dist_config,
                 )
@@ -100,7 +96,7 @@ class AutoTrainer(Trainer):
             if not param._is_initialized() and param._init_func is not None:
                 param.initialize()
         kwargs["model"] = model
-        print("auto_trainer is_parallelized_model", is_parallelized_model())
+        print("auto_trainer is_parallelized_model", parallelize.has_parallelized_model)
         super().__init__(*args, **kwargs)
         assert self.args.enable_auto_parallel
 
@@ -131,7 +127,7 @@ class AutoTrainer(Trainer):
             "sharding_mesh_dim": training_args.sharding_parallel_mesh_dimension,
         }
         auto_dist_config = model._generate_auto_dist_config(auto_dist_degree)
-        model = parallelize_model(
+        model = parallelize.parallelize_model(
             model,
             config=auto_dist_config,
         )
@@ -184,7 +180,7 @@ class AutoTrainer(Trainer):
 
         if self.args.use_intermediate_api:
             assert self.auto_dist_config is not None
-            self.optimizer = parallelize_optimizer(
+            self.optimizer = parallelize.parallelize_optimizer(
                 self.optimizer,
                 config=self.auto_dist_config,
             )
