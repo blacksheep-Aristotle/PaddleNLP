@@ -96,7 +96,6 @@ class AutoTrainer(Trainer):
             if not param._is_initialized() and param._init_func is not None:
                 param.initialize()
         kwargs["model"] = model
-        print("auto_trainer is_parallelized_model", parallelize.has_parallelized_model)
         super().__init__(*args, **kwargs)
         assert self.args.enable_auto_parallel
 
