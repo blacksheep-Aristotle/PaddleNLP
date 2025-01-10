@@ -94,6 +94,14 @@ class AutoTrainer(Trainer):
 
     @classmethod
     def parallel_model(cls, model, training_args: AutoTrainingArguments):
+        """
+        Parallelize the model from a single card version to a distributed version.
+        Args:
+            model (paddle.nn.Layer): the model to be parallelized.
+            training_args (AutoTrainingArguments) : Training arguments which contain distributed information
+        Returns:
+            the model after parallelize and config conatins distributed strategy
+        """
         if not training_args.use_intermediate_api:
             return model, None
         assert model is not None
