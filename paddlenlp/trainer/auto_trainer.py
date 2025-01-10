@@ -70,11 +70,7 @@ class AutoTrainer(Trainer):
         self.auto_dist_config = kwargs.pop("auto_dist_config", None)
         model = kwargs.get("model", None)
         assert model is not None
-        if (
-            kwargs.get("args", None) is not None
-            and kwargs["args"].use_intermediate_api
-            and not parallelize.has_parallelized_model
-        ):
+        if kwargs.get("args", None) is not None and kwargs["args"].use_intermediate_api:
             if not parallelize.has_parallelized_model:
                 model, self.auto_dist_config = self.parallel_model(model, kwargs["args"])
                 kwargs["model"] = model
