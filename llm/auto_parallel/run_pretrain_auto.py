@@ -24,6 +24,7 @@ from typing import List, Optional
 import numpy as np
 import paddle
 import paddle.distributed as dist
+from paddle.distributed import fleet
 
 from paddlenlp.ops import Topology
 from paddlenlp.trainer import (
@@ -88,6 +89,12 @@ class PreTrainingArguments(AutoTrainingArguments):
             "help": "The steps use to control the learing rate. If the step > decay_steps, will use the min_learning_rate."
         },
     )
+    enable_linear_fused_grad_add: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable fused linear grad add strategy, which will reduce elementwise add for grad accumulation in the backward of nn.Linear ."
+        },
+    )
     job_schedule_profiler_start: int = field(
         default=-1,
         metadata={"help": "The step to start job_schedule_profiler."},
@@ -111,10 +118,6 @@ class PreTrainingArguments(AutoTrainingArguments):
     fine_grained_log: bool = field(
         default=False,
         metadata={"help": "whether print find-grained performance log"},
-    )
-    use_intermediate_api: bool = field(
-        default=False,
-        metadata={"help": "Weather to use auto_parallel intermediate api"},
     )
 
     def __post_init__(self):
@@ -223,14 +226,13 @@ class ModelArguments:
         default=False,
         metadata={"help": "whether to fuse first up and gate proj in mlp block"},
     )
-    # this optional can be use in run_pretrain.py
     use_fast_layer_norm: bool = field(
         default=False,
-        metadata={"help": "GPT3 model, use fast layernorm"},
+        metadata={"help": "whether to use fast layernorm"},
     )
     use_fused_dropout_add: bool = field(
         default=False,
-        metadata={"help": "Gpt3 model, use_fused_dropout_add"},
+        metadata={"help": "whether to use_fused_dropout_add"},
     )
     recompute_granularity: str = field(
         default="full",
@@ -246,7 +248,6 @@ class ModelArguments:
             "help": "Pre-training from existing paddlenlp model weights. Default False and model will train from scratch. If set True, the model_name_or_path argument must exist in the paddlenlp models."
         },
     )
-
     hidden_dropout_prob: float = field(default=0.1, metadata={"help": "The hidden dropout prob."})
     attention_probs_dropout_prob: float = field(default=0.1, metadata={"help": "The attention hidden dropout prob."})
     use_fused_rope: Optional[bool] = field(
@@ -459,6 +460,13 @@ def init_seed(seed: int = 1234, args=None):
             paddle.seed(args.seed)
 
 
+def get_mesh(pp_idx=0):
+    mesh = fleet.auto.get_mesh()
+    if "pp" in mesh.dim_names:
+        mesh = mesh.get_mesh_with_dim("pp")[pp_idx]
+    return mesh
+
+
 def main():
     parser = PdArgumentParser((ModelArguments, DataArguments, PreTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -505,7 +513,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name_or_path)
 
     config = config_class.from_pretrained(model_args.model_name_or_path)
-    config.use_fast_layer_norm = model_args.use_fast_layer_norm
+
     config.seq_length = data_args.max_seq_length
     # There are some technique extend RotaryEmbedding context. so don't change max_position_embeddings
     if not model_args.continue_training:
@@ -529,7 +537,7 @@ def main():
     config.num_attention_heads = (
         model_args.num_attention_heads if model_args.num_attention_heads is not None else config.num_attention_heads
     )
-    config.use_fused_dropout_add = model_args.use_fused_dropout_add
+
     config.use_flash_attention = model_args.use_flash_attention
     config.use_fused_rms_norm = model_args.use_fused_rms_norm
     config.fuse_attention_qkv = model_args.fuse_attention_qkv
@@ -553,28 +561,25 @@ def main():
         pipeline.vpp_degree = config.virtual_pp_degree
         pipeline.vpp_seg_method = training_args.virtual_pipeline_seg_method
 
-    config.hidden_dropout_prob = model_args.hidden_dropout_prob
-    config.attention_probs_dropout_prob = model_args.attention_probs_dropout_prob
-    config.fine_grained_log = training_args.fine_grained_log
     print("Final pre-training config:", config)
 
-    # Set the dtype for loading model
+    # # Set the dtype for loading model
     dtype = "float32"
     if training_args.fp16_opt_level == "O2":
         if training_args.fp16:
             dtype = "float16"
         if training_args.bf16:
             dtype = "bfloat16"
+
     with paddle.LazyGuard():
         model = model_class.from_config(config, dtype=dtype)
         criterion = criterion_class(config)
+
     if training_args.recompute:
 
         def fn(layer):
             if hasattr(layer, "enable_recompute") and (layer.enable_recompute is False or layer.enable_recompute == 0):
                 layer.enable_recompute = True
-                if hasattr(layer, "layerwise_recompute"):
-                    layer.layerwise_recompute = True
 
         model.apply(fn)
 
@@ -613,7 +618,6 @@ def main():
         tokenizer,
         need_data=training_args.should_load_dataset,
     )
-
     trainer = PretrainingTrainer(
         model=model,
         criterion=criterion,
@@ -623,7 +627,6 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         optimizers=(None, lr_scheduler),
         tokenizer=tokenizer,
-        model_args=model_args,
     )
 
     checkpoint = None
