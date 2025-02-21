@@ -47,7 +47,7 @@ python -u  -m paddle.distributed.launch \
     --log_dir  "log/$task_name""_log" \
     ../run_finetune_auto.py \
     --model_name_or_path "meta-llama/Meta-Llama-3.1-8B-Instruct" \
-    --dataset_name_or_path "../fintune_data/data" \
+    --dataset_name_or_path "../../finetune_data/data" \
     --output_dir "output/$task_name/" \
     --enable_auto_parallel true \
     --lora false \

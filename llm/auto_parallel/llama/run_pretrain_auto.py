@@ -59,6 +59,7 @@ from paddlenlp.data.causal_dataset import (
     print_rank_0,
 )
 from paddlenlp.trainer.utils.doc import add_start_docstrings
+from paddlenlp.utils.tools import get_env_device
 
 
 @dataclass
@@ -173,6 +174,11 @@ class ModelArguments:
         default=None, metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"}
     )
 
+    use_fast_layer_norm: bool = field(
+        default=False,
+        metadata={"help": "GPT3 model, use fast layernorm"},
+    )
+
     config_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
     )
@@ -220,14 +226,6 @@ class ModelArguments:
         metadata={
             "help": "Pre-training from existing paddlenlp model weights. Default False and model will train from scratch. If set True, the model_name_or_path argument must exist in the paddlenlp models."
         },
-    )
-    sequence_parallel: bool = field(
-        default=False,
-        metadata={"help": "whether to use sequence parallel"},
-    )
-    fuse_sequence_parallel_allreduce: bool = field(
-        default=False,
-        metadata={"help": "whether to use fuse sequence parallel allreduce"},
     )
     use_fused_rope: Optional[bool] = field(
         default=False,
@@ -504,6 +502,8 @@ def main():
 
     config = config_class.from_pretrained(model_args.model_name_or_path)
 
+    config.use_fast_layer_norm = model_args.use_fast_layer_norm
+
     config.seq_length = data_args.max_seq_length
     # There are some technique extend RotaryEmbedding context. so don't change max_position_embeddings
     if not model_args.continue_training:
@@ -534,8 +534,10 @@ def main():
     config.fuse_attention_ffn = model_args.fuse_attention_ffn
     config.recompute_granularity = model_args.recompute_granularity
     config.virtual_pp_degree = model_args.virtual_pp_degree
-    config.sequence_parallel = model_args.sequence_parallel
-    config.fuse_sequence_parallel_allreduce = model_args.fuse_sequence_parallel_allreduce
+    config.sequence_parallel = training_args.sequence_parallel
+
+    config.fuse_sequence_parallel_allreduce = training_args.fuse_sequence_parallel_allreduce
+
     config.use_fused_rope = model_args.use_fused_rope
     config.no_recompute_layers = model_args.no_recompute_layers
     config.pp_recompute_interval = model_args.pp_recompute_interval
@@ -550,6 +552,15 @@ def main():
         pipeline = training_args.strategy.pipeline
         pipeline.vpp_degree = config.virtual_pp_degree
         pipeline.vpp_seg_method = training_args.virtual_pipeline_seg_method
+    if get_env_device() == "xpu" and training_args.gradient_accumulation_steps > 1:
+        try:
+            from paddle_xpu.layers.nn.linear import LinearConfig  # noqa: F401
+
+            LinearConfig.enable_accumulate_steps_opt()
+            LinearConfig.set_accumulate_steps(training_args.gradient_accumulation_steps)
+        except ImportError:
+            # It's OK, not use accumulate_steps optimization
+            pass
 
     print("Final pre-training config:", config)
 
@@ -608,7 +619,6 @@ def main():
         tokenizer,
         need_data=training_args.should_load_dataset,
     )
-
     trainer = PretrainingTrainer(
         model=model,
         criterion=criterion,
@@ -618,7 +628,6 @@ def main():
         eval_dataset=eval_dataset if training_args.do_eval else None,
         optimizers=(None, lr_scheduler),
         tokenizer=tokenizer,
-        model_args=model_args,
     )
 
     checkpoint = None

@@ -19,6 +19,7 @@ from datetime import datetime
 
 from paddlenlp.generation import GenerationConfig
 from server.utils import model_server_logger
+from dataclasses import dataclass
 
 
 class Config:
@@ -58,6 +59,12 @@ class Config:
         else:
             raise Exception(f"unsupported device type: {self.device}")
 
+        # multi-node config
+        self.nnode = int(env.get("MP_NNODE", "1"))
+        assert self.mp_num % self.nnode == 0 ,f"mp_num: {self.mp_num} should be divisible by nnode: {self.nnode}"
+        self.mp_num_per_node = self.mp_num // self.nnode
+        self.host_ip = os.getenv("HOST_IP", "127.0.0.1")
+        
         # Triton config
         self.max_prefill_batch = int(os.getenv("MAX_PREFILL_BATCH", 1))
         if self.max_prefill_batch <= 0:
@@ -91,6 +98,7 @@ class Config:
         self.block_size = int(env.get("BLOCK_SIZE", 64))
         self.use_cache_kv_int8 = int(os.getenv("USE_CACHE_KV_INT8", 0))
         self.use_cache_kv_int4 = int(os.getenv("USE_CACHE_KV_INT4", 0))
+
 
         # infer config
         self.max_batch_size = int(env.get("BATCH_SIZE", 50))
@@ -167,6 +175,20 @@ class Config:
             f"which means the exported MAX_DEC_LEN should less than "
             f"{self.max_seq_len}, but now it's {self.dec_len_limit}."
         )
+        if os.getenv("DISABLE_CAPACITY_CHECKER", "0") == 1:
+            # max_output_token_num
+            max_output_token_num = (self.total_block_num - self.max_block_num) * self.block_size + self.enc_dec_block_num * self.block_size
+            assert max_output_token_num >= self.dec_len_limit, (
+                f"The available output token number of the service is {max_output_token_num}, "
+                f"which is less than the setting MAX_DEC_LEN:{self.dec_len_limit}. "
+            )
+    
+            # Maximum input length of a single query that the service can handle
+            max_input_token_num = int(math.floor(self.max_block_num * self.block_size - self.dec_token_num))
+            assert max_input_token_num >= self.seq_len_limit, (
+                f"The available input token number of the service is {max_input_token_num}, "
+                f"which is less than the setting MAX_SEQ_LEN:{self.seq_len_limit}. "
+            )
 
     def print(self, file=None):
         """
@@ -203,6 +225,27 @@ class Config:
         model_config_json = json.load(open(self.model_config_path, 'r', encoding='utf-8'))
         return model_config_json
 
+    def get_speculate_config(self):
+        """
+        get speculate_decoding related config
+
+        Returns:
+            SpeculateConfig: the speculate related config
+        """
+        speculate_config = SpeculateConfig()
+        model_cfg = self.get_model_config()
+        if model_cfg.get("speculate_method", "None") != "None":
+            speculate_config.speculate_method = str(model_cfg["speculate_method"])
+            speculate_config.speculate_max_draft_token_num = model_cfg[
+                "speculate_max_draft_token_num"]
+            speculate_config.speculate_max_ngram_size = model_cfg[
+                "speculate_max_ngram_size"]
+
+        if speculate_config.speculate_method not in ["None", "inference_with_reference"]:
+            model_server_logger.error(f"Unsupport speculate method: {speculate_config.speculate_method}")
+
+        return speculate_config
+
     def read_from_config(self):
         """
         reset model config from json file
@@ -234,3 +277,10 @@ class Config:
 
     def __str__(self) -> str:
         return json.dumps(self.__dict__, indent=4)
+
+
+@dataclass
+class SpeculateConfig:
+    speculate_method: str = "None"
+    speculate_max_draft_token_num: int = 1
+    speculate_max_ngram_size: int = 1
