@@ -28,7 +28,6 @@ from paddle.distributed.auto_parallel.intermediate.parallelize import (
 )
 
 from .sft_trainer import SFTTrainer
-
 from ..data import DataCollatorForSeq2Seq
 from ..trainer.argparser import strtobool
 from ..trainer.trainer import (

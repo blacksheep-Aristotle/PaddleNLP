@@ -487,6 +487,7 @@ def main():
     #     layer.register_forward_pre_hook(forward_pre_hook)
     #     layer.register_forward_post_hook(forward_post_hook)
     # Train
+
     if training_args.do_train:
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
